@@ -1,6 +1,5 @@
 use mlua::prelude::*;
 use std::env;
-use std::fs;
 use std::process;
 
 fn main() -> LuaResult<()> {
@@ -17,12 +16,13 @@ fn main() -> LuaResult<()> {
 
     let fennel_code = include_str!("../fennel-1.6.0.lua");
     let fennel_module = lua.load(fennel_code).eval::<LuaValue>()?;
+    lua.register_module("fennel", fennel_module)?;
 
-    lua.globals().set("fennel", fennel_module.clone())?;
-    lua.load(r#"package.preload["fennel"] = function() return fennel end"#).exec()?;
-
-    let dofile_code = format!(r#"require("fennel").install().dofile("{}")"#, filename);
-    lua.load(&dofile_code).exec()?;
+    lua.load(format!(
+        r#"require("fennel").install().dofile("{}")"#,
+        filename
+    ))
+    .exec()?;
 
     Ok(())
 }
