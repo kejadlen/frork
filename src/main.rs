@@ -244,7 +244,7 @@ impl Frork {
         Ok(())
     }
 
-    fn create_lua_module(&self, lua: &Lua) -> LuaResult<LuaTable> {
+    fn bind(&self, lua: &Lua) -> LuaResult<LuaTable> {
         let frork_table = lua.create_table()?;
         let frork = Rc::new(Self::new());
 
@@ -268,11 +268,7 @@ impl Frork {
     }
 }
 
-fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
-
-    let cli = Cli::parse();
-
+fn run(script_path: &str) -> Result<()> {
     let lua = Lua::new();
 
     let fennel_code = include_str!("../fennel-1.6.0.lua");
@@ -285,19 +281,29 @@ fn main() -> Result<()> {
 
     let frork = Frork::new();
     let frork_module = frork
-        .create_lua_module(&lua)
+        .bind(&lua)
         .map_err(|e| anyhow!("Failed to create Frork module: {}", e))?;
     lua.register_module("frork", frork_module)
         .map_err(|e| anyhow!("Failed to register Frork module: {}", e))?;
 
+    lua.load(format!(
+        r#"require("fennel").install().dofile("{}")"#,
+        script_path
+    ))
+    .exec()
+    .map_err(|e| anyhow!("Failed to execute script '{}': {}", script_path, e))?;
+
+    Ok(())
+}
+
+fn main() -> Result<()> {
+    tracing_subscriber::fmt::init();
+
+    let cli = Cli::parse();
+
     match &cli.command {
         Commands::Check { script } => {
-            lua.load(format!(
-                r#"require("fennel").install().dofile("{}")"#,
-                script
-            ))
-            .exec()
-            .map_err(|e| anyhow!("Failed to execute script '{}': {}", script, e))?;
+            run(script)?;
         }
     }
 
