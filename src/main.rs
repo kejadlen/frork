@@ -96,20 +96,22 @@ struct Symlink {
 
 impl Symlink {
     fn new(args: LuaMultiValue) -> Result<Self> {
-        let args: Vec<String> = args
-            .into_iter()
-            .map(|v| {
-                v.to_string()
-                    .map_err(|e| anyhow!("Failed to convert arg to string: {}", e))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let args_vec: Vec<LuaValue> = args.into_iter().collect();
 
-        if args.len() != 2 {
+        if args_vec.len() != 2 {
             bail!(FrorkError::InvalidSymlinkArgs);
         }
+
+        let target = args_vec[0]
+            .to_string()
+            .map_err(|_| anyhow!("Target must be a string"))?;
+        let source = args_vec[1]
+            .to_string()
+            .map_err(|_| anyhow!("Source must be a string"))?;
+
         Ok(Self {
-            target: expand_tilde(&args[0]),
-            source: expand_tilde(&args[1]),
+            target: expand_tilde(&target),
+            source: expand_tilde(&source),
         })
     }
 }
