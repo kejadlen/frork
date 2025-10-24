@@ -7,22 +7,22 @@ fn main() -> LuaResult<()> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() != 2 {
-        eprintln!("Usage: {} <script.lua>", args[0]);
+        eprintln!("Usage: {} <script.fnl>", args[0]);
         process::exit(1);
     }
 
     let filename = &args[1];
-    let script_content = fs::read_to_string(filename).unwrap_or_else(|err| {
-        eprintln!("Error reading file '{}': {}", filename, err);
-        process::exit(1);
-    });
 
     let lua = Lua::new();
 
     let fennel_code = include_str!("../fennel-1.6.0.lua");
-    lua.load(fennel_code).exec()?;
+    let fennel_module = lua.load(fennel_code).eval::<LuaValue>()?;
 
-    lua.load(&script_content).exec()?;
+    lua.globals().set("fennel", fennel_module.clone())?;
+    lua.load(r#"package.preload["fennel"] = function() return fennel end"#).exec()?;
+
+    let dofile_code = format!(r#"require("fennel").install().dofile("{}")"#, filename);
+    lua.load(&dofile_code).exec()?;
 
     Ok(())
 }
