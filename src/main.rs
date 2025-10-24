@@ -1,16 +1,21 @@
+use clap::{Parser, Subcommand};
 use mlua::prelude::*;
-use std::env;
-use std::process;
+
+#[derive(Parser)]
+#[command(name = "frork")]
+#[command(about = "A Fennel-based configuration management tool")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    Check { script: String },
+}
 
 fn main() -> LuaResult<()> {
-    let args: Vec<String> = env::args().collect();
-
-    if args.len() != 2 {
-        eprintln!("Usage: {} <script.fnl>", args[0]);
-        process::exit(1);
-    }
-
-    let filename = &args[1];
+    let cli = Cli::parse();
 
     let lua = Lua::new();
 
@@ -18,11 +23,15 @@ fn main() -> LuaResult<()> {
     let fennel_module = lua.load(fennel_code).eval::<LuaValue>()?;
     lua.register_module("fennel", fennel_module)?;
 
-    lua.load(format!(
-        r#"require("fennel").install().dofile("{}")"#,
-        filename
-    ))
-    .exec()?;
+    match &cli.command {
+        Commands::Check { script } => {
+            lua.load(format!(
+                r#"require("fennel").install().dofile("{}")"#,
+                script
+            ))
+            .exec()?;
+        }
+    }
 
     Ok(())
 }
