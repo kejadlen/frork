@@ -3,6 +3,9 @@ use mlua::prelude::*;
 fn main() -> LuaResult<()> {
     let lua = Lua::new();
 
+    let fennel_code = include_str!("../fennel-1.6.0.lua");
+    lua.load(fennel_code).exec()?;
+
     let map_table = lua.create_table()?;
     map_table.set(1, "one")?;
     map_table.set("two", 2)?;
