@@ -44,7 +44,16 @@ pub enum FrorkError {
 
 impl From<LuaError> for FrorkError {
     fn from(err: LuaError) -> Self {
-        FrorkError::Lua(err.to_string())
+        match err {
+            LuaError::CallbackError { cause, .. } => {
+                if let Some(frork_err) = cause.downcast_ref::<FrorkError>() {
+                    frork_err.clone()
+                } else {
+                    FrorkError::Lua(format!("Callback error: {}", cause))
+                }
+            }
+            _ => FrorkError::Lua(err.to_string()),
+        }
     }
 }
 
@@ -228,9 +237,9 @@ impl Frork {
         }
     }
 
-    fn check(&self, args: LuaMultiValue) -> Result<()> {
+    fn check(&self, args: LuaMultiValue) -> LuaResult<()> {
         if args.is_empty() {
-            return Err(FrorkError::NoOperation.into());
+            return Err(LuaError::external(FrorkError::NoOperation));
         }
 
         let mut args_iter = args.into_iter();
@@ -238,7 +247,9 @@ impl Frork {
             .next()
             .and_then(|v| v.to_string().ok())
             .ok_or_else(|| {
-                FrorkError::InvalidArguments("First argument must be assertion type".to_string())
+                LuaError::external(FrorkError::InvalidArguments(
+                    "First argument must be assertion type".to_string(),
+                ))
             })?;
 
         let assertion_args: LuaMultiValue = args_iter.collect();
@@ -246,8 +257,9 @@ impl Frork {
         let assertion = self
             .registry
             .borrow()
-            .create(&assertion_type, assertion_args)?;
-        let status = assertion.status()?;
+            .create(&assertion_type, assertion_args)
+            .map_err(LuaError::external)?;
+        let status = assertion.status().map_err(LuaError::external)?;
         match status {
             Status::Ok => println!("ok: {}", assertion.display()),
             Status::Missing => println!("missing: {}", assertion.display()),
@@ -255,8 +267,8 @@ impl Frork {
         Ok(())
     }
 
-    fn register(&self, name: &str, table: LuaTable) -> Result<()> {
-        let status_fn: LuaFunction = table.get("status").map_err(FrorkError::from)?;
+    fn register(&self, name: &str, table: LuaTable) -> LuaResult<()> {
+        let status_fn: LuaFunction = table.get("status")?;
 
         let name_clone = name.to_string();
         self.registry.borrow_mut().register(name, move |args| {
@@ -276,37 +288,15 @@ impl Frork {
 
         let frork_clone = frork.clone();
         let check_fn = lua
-            .create_function(move |_lua, args: LuaMultiValue| {
-                frork_clone.check(args).map_err(LuaError::external)
-            })
-            .map_err(|e| match e {
-                LuaError::CallbackError { cause, .. } => {
-                    if let Some(frork_err) = cause.downcast_ref::<FrorkError>() {
-                        frork_err.clone().into()
-                    } else {
-                        eyre!("Callback error: {}", cause)
-                    }
-                }
-                _ => FrorkError::Lua(e.to_string()).into(),
-            })?;
+            .create_function(move |_lua, args: LuaMultiValue| frork_clone.check(args))
+            .map_err(FrorkError::from)?;
 
         let frork_clone = frork.clone();
         let register_fn = lua
             .create_function(move |_lua, (name, table): (String, LuaTable)| {
-                frork_clone
-                    .register(&name, table)
-                    .map_err(LuaError::external)
+                frork_clone.register(&name, table)
             })
-            .map_err(|e| match e {
-                LuaError::CallbackError { cause, .. } => {
-                    if let Some(frork_err) = cause.downcast_ref::<FrorkError>() {
-                        frork_err.clone().into()
-                    } else {
-                        eyre!("Callback error: {}", cause)
-                    }
-                }
-                _ => FrorkError::Lua(e.to_string()).into(),
-            })?;
+            .map_err(FrorkError::from)?;
 
         frork_table.set("ok", check_fn).map_err(FrorkError::from)?;
         frork_table
