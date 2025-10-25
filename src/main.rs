@@ -1,6 +1,8 @@
 use clap::{Parser, Subcommand};
-use color_eyre::{Result, eyre};
-use eyre::WrapErr;
+use color_eyre::{
+    Result,
+    eyre::{WrapErr, eyre},
+};
 use mlua::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -226,7 +228,7 @@ impl Frork {
         }
     }
 
-    fn ok(&self, args: LuaMultiValue) -> Result<()> {
+    fn check(&self, args: LuaMultiValue) -> Result<()> {
         if args.is_empty() {
             return Err(FrorkError::NoOperation.into());
         }
@@ -253,8 +255,8 @@ impl Frork {
         Ok(())
     }
 
-    fn register(&self, name: &str, table: LuaTable) -> Result<(), FrorkError> {
-        let status_fn: LuaFunction = table.get("status")?;
+    fn register(&self, name: &str, table: LuaTable) -> Result<()> {
+        let status_fn: LuaFunction = table.get("status").map_err(FrorkError::from)?;
 
         let name_clone = name.to_string();
         self.registry.borrow_mut().register(name, move |args| {
@@ -268,61 +270,71 @@ impl Frork {
         Ok(())
     }
 
-    fn bind(&self, lua: &Lua) -> LuaResult<LuaTable> {
-        let frork_table = lua.create_table()?;
+    fn lua_table(lua: &Lua) -> Result<LuaTable> {
+        let frork_table = lua.create_table().map_err(FrorkError::from)?;
         let frork = Rc::new(Self::new());
 
         let frork_clone = frork.clone();
-        let ok_fn = lua.create_function(move |_lua, args: LuaMultiValue| {
-            frork_clone
-                .ok(args)
-                .map_err(|e| LuaError::RuntimeError(e.to_string()))
-        })?;
+        let check_fn = lua
+            .create_function(move |_lua, args: LuaMultiValue| {
+                frork_clone
+                    .check(args)
+                    .map_err(|e| LuaError::RuntimeError(e.to_string()))
+            })
+            .map_err(FrorkError::from)?;
 
         let frork_clone = frork.clone();
-        let register_fn = lua.create_function(move |_lua, (name, table): (String, LuaTable)| {
-            frork_clone
-                .register(&name, table)
-                .map_err(|e| LuaError::RuntimeError(e.to_string()))
-        })?;
+        let register_fn = lua
+            .create_function(move |_lua, (name, table): (String, LuaTable)| {
+                frork_clone
+                    .register(&name, table)
+                    .map_err(|e| LuaError::RuntimeError(e.to_string()))
+            })
+            .map_err(FrorkError::from)?;
 
-        frork_table.set("ok", ok_fn)?;
-        frork_table.set("register", register_fn)?;
+        frork_table.set("ok", check_fn).map_err(FrorkError::from)?;
+        frork_table
+            .set("register", register_fn)
+            .map_err(FrorkError::from)?;
         Ok(frork_table)
     }
 }
 
-fn run(script_path: &str) -> Result<(), FrorkError> {
-    let lua = Lua::new();
+fn run(command: &Commands) -> color_eyre::Result<()> {
+    match command {
+        Commands::Check { script } => {
+            let lua = Lua::new();
 
-    let fennel_code = include_str!("../fennel-1.6.0.lua");
-    let fennel_module = lua.load(fennel_code).eval::<LuaValue>()?;
-    lua.register_module("fennel", fennel_module)?;
+            let fennel_code = include_str!("../fennel-1.6.0.lua");
+            let fennel_module = lua
+                .load(fennel_code)
+                .eval::<LuaValue>()
+                .map_err(|e| eyre!("Failed to load Fennel: {}", e))?;
+            lua.register_module("fennel", fennel_module)
+                .map_err(|e| eyre!("Failed to register Fennel module: {}", e))?;
 
-    let frork = Frork::new();
-    let frork_module = frork.bind(&lua)?;
-    lua.register_module("frork", frork_module)?;
+            let frork_module = Frork::lua_table(&lua)
+                .map_err(|e| eyre!("Failed to create Frork module: {}", e))?;
+            lua.register_module("frork", frork_module)
+                .map_err(|e| eyre!("Failed to register Frork module: {}", e))?;
 
-    lua.load(format!(
-        r#"require("fennel").install().dofile("{}")"#,
-        script_path
-    ))
-    .exec()?;
-
+            lua.load(format!(
+                r#"require("fennel").install().dofile("{}")"#,
+                script
+            ))
+            .exec()
+            .map_err(|e| eyre!("Failed to execute script: {}", e))?;
+        }
+    }
     Ok(())
 }
 
-fn main() -> color_eyre::Result<()> {
+fn main() -> Result<()> {
     color_eyre::install()?;
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
-
-    match &cli.command {
-        Commands::Check { script } => {
-            run(script).wrap_err("Failed to run script")?;
-        }
-    }
+    run(&cli.command).wrap_err("Failed to run command")?;
 
     Ok(())
 }
