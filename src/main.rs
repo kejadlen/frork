@@ -86,13 +86,19 @@ struct Registry {
     assertion_types: HashMap<String, AssertionFactory>,
 }
 
-impl Registry {
-    fn new() -> Self {
-        Self {
+impl Default for Registry {
+    fn default() -> Self {
+        let mut registry = Self {
             assertion_types: HashMap::new(),
-        }
+        };
+        registry.register("symlink", |args| {
+            Symlink::new(args).map(|s| Box::new(s) as Box<dyn AssertionType>)
+        });
+        registry
     }
+}
 
+impl Registry {
     fn register<F>(&mut self, name: &str, factory: F)
     where
         F: Fn(LuaMultiValue) -> Result<Box<dyn AssertionType>> + 'static,
@@ -225,18 +231,15 @@ struct Frork {
     registry: RefCell<Registry>,
 }
 
-impl Frork {
-    fn new() -> Self {
-        let mut registry = Registry::new();
-        registry.register("symlink", |args| {
-            Symlink::new(args).map(|s| Box::new(s) as Box<dyn AssertionType>)
-        });
-
+impl Default for Frork {
+    fn default() -> Self {
         Self {
-            registry: RefCell::new(registry),
+            registry: RefCell::new(Registry::default()),
         }
     }
+}
 
+impl Frork {
     fn check(&self, args: LuaMultiValue) -> LuaResult<()> {
         if args.is_empty() {
             return Err(LuaError::external(FrorkError::NoOperation));
@@ -284,7 +287,7 @@ impl Frork {
 
     fn lua_table(lua: &Lua) -> Result<LuaTable> {
         let frork_table = lua.create_table().map_err(FrorkError::from)?;
-        let frork = Rc::new(Self::new());
+        let frork = Rc::new(Self::default());
 
         let frork_clone = frork.clone();
         let check_fn = lua
