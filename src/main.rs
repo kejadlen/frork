@@ -36,10 +36,10 @@ pub enum FrorkError {
     UnknownAssertionType { assertion_type: String },
     #[error("Invalid arguments: {0}")]
     InvalidArguments(String),
+    #[error("Missing assertion type")]
+    MissingAssertionType,
     #[error("Lua error: {0}")]
     Lua(String),
-    #[error("Assertion error: {0}")]
-    Assertion(String),
 }
 
 impl From<LuaError> for FrorkError {
@@ -161,19 +161,19 @@ impl AssertionType for Symlink {
             } else {
                 unimplemented!(
                     "{}",
-                    FrorkError::Assertion(format!(
+                    format!(
                         "symlink {} {} points to wrong target",
                         self.target, self.source
-                    ))
+                    )
                 );
             }
         } else {
             unimplemented!(
                 "{}",
-                FrorkError::Assertion(format!(
+                format!(
                     "symlink {} {} target exists but is not a symlink",
                     self.target, self.source
-                ))
+                )
             );
         }
     }
@@ -208,9 +208,7 @@ impl AssertionType for FennelAssertion {
         match result.as_str() {
             "ok" => Ok(Status::Ok),
             "missing" => Ok(Status::Missing),
-            _ => {
-                Err(FrorkError::Assertion(format!("Invalid status returned: '{}'", result)).into())
-            }
+            _ => Err(eyre!("Invalid status returned: '{}'", result)),
         }
     }
 
@@ -240,36 +238,6 @@ impl Default for Frork {
 }
 
 impl Frork {
-    fn check(&self, args: LuaMultiValue) -> LuaResult<()> {
-        if args.is_empty() {
-            return Err(LuaError::external(FrorkError::NoOperation));
-        }
-
-        let mut args_iter = args.into_iter();
-        let assertion_type = args_iter
-            .next()
-            .and_then(|v| v.to_string().ok())
-            .ok_or_else(|| {
-                LuaError::external(FrorkError::InvalidArguments(
-                    "First argument must be assertion type".to_string(),
-                ))
-            })?;
-
-        let assertion_args: LuaMultiValue = args_iter.collect();
-
-        let assertion = self
-            .registry
-            .borrow()
-            .create(&assertion_type, assertion_args)
-            .map_err(LuaError::external)?;
-        let status = assertion.status().map_err(LuaError::external)?;
-        match status {
-            Status::Ok => println!("ok: {}", assertion.display()),
-            Status::Missing => println!("missing: {}", assertion.display()),
-        }
-        Ok(())
-    }
-
     fn register(&self, name: &str, table: LuaTable) -> LuaResult<()> {
         let status_fn: LuaFunction = table.get("status")?;
 
@@ -306,6 +274,32 @@ impl Frork {
             .set("register", register_fn)
             .map_err(FrorkError::from)?;
         Ok(frork_table)
+    }
+
+    fn check(&self, args: LuaMultiValue) -> LuaResult<()> {
+        if args.is_empty() {
+            return Err(LuaError::external(FrorkError::NoOperation));
+        }
+
+        let mut args_iter = args.into_iter();
+        let assertion_type = args_iter
+            .next()
+            .and_then(|v| v.to_string().ok())
+            .ok_or_else(|| LuaError::external(FrorkError::MissingAssertionType))?;
+
+        let assertion_args: LuaMultiValue = args_iter.collect();
+
+        let assertion = self
+            .registry
+            .borrow()
+            .create(&assertion_type, assertion_args)
+            .map_err(LuaError::external)?;
+        let status = assertion.status().map_err(LuaError::external)?;
+        match status {
+            Status::Ok => println!("ok: {}", assertion.display()),
+            Status::Missing => println!("missing: {}", assertion.display()),
+        }
+        Ok(())
     }
 }
 
