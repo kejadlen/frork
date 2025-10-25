@@ -183,13 +183,13 @@ impl AssertionType for Symlink {
     }
 }
 
-struct FennelAssertion {
+struct LuaAssertion {
     name: String,
     args: LuaMultiValue,
     status_fn: LuaFunction,
 }
 
-impl FennelAssertion {
+impl LuaAssertion {
     fn new(name: &str, args: LuaMultiValue, status_fn: LuaFunction) -> Self {
         Self {
             name: name.to_string(),
@@ -199,7 +199,7 @@ impl FennelAssertion {
     }
 }
 
-impl AssertionType for FennelAssertion {
+impl AssertionType for LuaAssertion {
     fn status(&self) -> Result<Status> {
         let result = self
             .status_fn
@@ -243,7 +243,7 @@ impl Frork {
 
         let name_clone = name.to_string();
         self.registry.borrow_mut().register(name, move |args| {
-            Ok(Box::new(FennelAssertion::new(
+            Ok(Box::new(LuaAssertion::new(
                 &name_clone,
                 args,
                 status_fn.clone(),
@@ -303,7 +303,7 @@ impl Frork {
     }
 }
 
-fn run(command: &Commands) -> color_eyre::Result<()> {
+fn run(command: &Commands) -> Result<()> {
     match command {
         Commands::Check { script } => {
             let lua = Lua::new();
@@ -316,8 +316,7 @@ fn run(command: &Commands) -> color_eyre::Result<()> {
             lua.register_module("fennel", fennel_module)
                 .map_err(|e| eyre!("Failed to register Fennel module: {}", e))?;
 
-            let frork_module = Frork::lua_table(&lua)
-                .map_err(|e| eyre!("Failed to create Frork module: {}", e))?;
+            let frork_module = Frork::lua_table(&lua).wrap_err("Failed to create Frork module")?;
             lua.register_module("frork", frork_module)
                 .map_err(|e| eyre!("Failed to register Frork module: {}", e))?;
 
