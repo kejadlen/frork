@@ -277,20 +277,36 @@ impl Frork {
         let frork_clone = frork.clone();
         let check_fn = lua
             .create_function(move |_lua, args: LuaMultiValue| {
-                frork_clone
-                    .check(args)
-                    .map_err(|e| LuaError::RuntimeError(e.to_string()))
+                frork_clone.check(args).map_err(LuaError::external)
             })
-            .map_err(FrorkError::from)?;
+            .map_err(|e| match e {
+                LuaError::CallbackError { cause, .. } => {
+                    if let Some(frork_err) = cause.downcast_ref::<FrorkError>() {
+                        frork_err.clone().into()
+                    } else {
+                        eyre!("Callback error: {}", cause)
+                    }
+                }
+                _ => FrorkError::Lua(e.to_string()).into(),
+            })?;
 
         let frork_clone = frork.clone();
         let register_fn = lua
             .create_function(move |_lua, (name, table): (String, LuaTable)| {
                 frork_clone
                     .register(&name, table)
-                    .map_err(|e| LuaError::RuntimeError(e.to_string()))
+                    .map_err(LuaError::external)
             })
-            .map_err(FrorkError::from)?;
+            .map_err(|e| match e {
+                LuaError::CallbackError { cause, .. } => {
+                    if let Some(frork_err) = cause.downcast_ref::<FrorkError>() {
+                        frork_err.clone().into()
+                    } else {
+                        eyre!("Callback error: {}", cause)
+                    }
+                }
+                _ => FrorkError::Lua(e.to_string()).into(),
+            })?;
 
         frork_table.set("ok", check_fn).map_err(FrorkError::from)?;
         frork_table
