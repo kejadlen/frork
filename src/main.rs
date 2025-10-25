@@ -1,5 +1,6 @@
-use anyhow::{Result, anyhow, bail};
 use clap::{Parser, Subcommand};
+use color_eyre::{Result, eyre};
+use eyre::WrapErr;
 use mlua::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -23,14 +24,26 @@ enum Commands {
     Check { script: String },
 }
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone)]
 pub enum FrorkError {
     #[error("No operation specified")]
     NoOperation,
     #[error("Unknown operation: {operation}")]
     UnknownOperation { operation: String },
-    #[error("Symlink requires exactly 2 arguments: target and source")]
-    InvalidSymlinkArgs,
+    #[error("Unknown assertion type: {assertion_type}")]
+    UnknownAssertionType { assertion_type: String },
+    #[error("Invalid arguments: {0}")]
+    InvalidArguments(String),
+    #[error("Lua error: {0}")]
+    Lua(String),
+    #[error("Assertion error: {0}")]
+    Assertion(String),
+}
+
+impl From<LuaError> for FrorkError {
+    fn from(err: LuaError) -> Self {
+        FrorkError::Lua(err.to_string())
+    }
 }
 
 fn expand_tilde(path: &str) -> String {
@@ -52,7 +65,7 @@ enum Status {
 }
 
 trait AssertionType {
-    fn check(&self) -> Status;
+    fn status(&self) -> Result<Status>;
     fn display(&self) -> String;
 }
 
@@ -77,15 +90,13 @@ impl Registry {
             .insert(name.to_string(), Box::new(factory));
     }
 
-    fn create(
-        &self,
-        assertion_type: &str,
-        args: LuaMultiValue,
-    ) -> Result<Option<Box<dyn AssertionType>>> {
-        match self.assertion_types.get(assertion_type) {
-            Some(factory) => factory(args).map(Some),
-            None => Ok(None),
-        }
+    fn create(&self, assertion_type: &str, args: LuaMultiValue) -> Result<Box<dyn AssertionType>> {
+        let factory = self.assertion_types.get(assertion_type).ok_or_else(|| {
+            FrorkError::UnknownAssertionType {
+                assertion_type: assertion_type.to_string(),
+            }
+        })?;
+        factory(args)
     }
 }
 
@@ -96,49 +107,57 @@ struct Symlink {
 
 impl Symlink {
     fn new(args: LuaMultiValue) -> Result<Self> {
-        let args_vec: Vec<LuaValue> = args.into_iter().collect();
+        let args_vec: Vec<LuaValue> = args.into_vec();
 
         if args_vec.len() != 2 {
-            bail!(FrorkError::InvalidSymlinkArgs);
+            return Err(FrorkError::InvalidArguments(format!(
+                "Symlink requires exactly 2 arguments, got {}",
+                args_vec.len()
+            ))
+            .into());
         }
 
-        let target = args_vec[0]
-            .to_string()
-            .map_err(|_| anyhow!("Target must be a string"))?;
-        let source = args_vec[1]
-            .to_string()
-            .map_err(|_| anyhow!("Source must be a string"))?;
+        let strings: Vec<String> = args_vec
+            .into_iter()
+            .map(|val| {
+                val.to_string().map(|s| expand_tilde(&s)).map_err(|_| {
+                    FrorkError::InvalidArguments("Arguments must be strings".to_string())
+                })
+            })
+            .collect::<Result<_, _>>()?;
 
-        Ok(Self {
-            target: expand_tilde(&target),
-            source: expand_tilde(&source),
-        })
+        let [target, source]: [String; 2] = strings.try_into().unwrap();
+
+        Ok(Self { target, source })
     }
 }
 
 impl AssertionType for Symlink {
-    fn check(&self) -> Status {
-        if Path::new(&self.target).exists() {
-            // Check if it's a symlink pointing to the correct source
-            if let Ok(link_target) = fs::read_link(&self.target) {
-                if link_target == Path::new(&self.source) {
-                    Status::Ok
-                } else {
-                    unimplemented!(
-                        "symlink {} {} points to wrong target",
-                        self.target,
-                        self.source
-                    );
-                }
+    fn status(&self) -> Result<Status> {
+        if !Path::new(&self.target).exists() {
+            return Ok(Status::Missing);
+        }
+
+        if let Ok(link_target) = fs::read_link(&self.target) {
+            if link_target == Path::new(&self.source) {
+                Ok(Status::Ok)
             } else {
                 unimplemented!(
-                    "symlink {} {} target exists but is not a symlink",
-                    self.target,
-                    self.source
+                    "{}",
+                    FrorkError::Assertion(format!(
+                        "symlink {} {} points to wrong target",
+                        self.target, self.source
+                    ))
                 );
             }
         } else {
-            Status::Missing
+            unimplemented!(
+                "{}",
+                FrorkError::Assertion(format!(
+                    "symlink {} {} target exists but is not a symlink",
+                    self.target, self.source
+                ))
+            );
         }
     }
 
@@ -164,15 +183,17 @@ impl FennelAssertion {
 }
 
 impl AssertionType for FennelAssertion {
-    fn check(&self) -> Status {
-        // Call the Lua function with args and convert result
-        match self.status_fn.call::<String>(self.args.clone()) {
-            Ok(result) => match result.as_str() {
-                "ok" => Status::Ok,
-                "missing" => Status::Missing,
-                _ => Status::Ok, // Default fallback
-            },
-            Err(_) => Status::Ok, // Default fallback on error
+    fn status(&self) -> Result<Status> {
+        let result = self
+            .status_fn
+            .call::<String>(self.args.clone())
+            .map_err(FrorkError::from)?;
+        match result.as_str() {
+            "ok" => Ok(Status::Ok),
+            "missing" => Ok(Status::Missing),
+            _ => {
+                Err(FrorkError::Assertion(format!("Invalid status returned: '{}'", result)).into())
+            }
         }
     }
 
@@ -188,51 +209,52 @@ impl AssertionType for FennelAssertion {
 }
 
 struct Frork {
-    registry: Rc<RefCell<Registry>>,
+    // RefCell needed for interior mutability - register() method needs to add
+    // new assertion types at runtime when called from Lua/Fennel code
+    registry: RefCell<Registry>,
 }
 
 impl Frork {
     fn new() -> Self {
         let mut registry = Registry::new();
-        registry.register("symlink", |args| Ok(Box::new(Symlink::new(args)?)));
+        registry.register("symlink", |args| {
+            Symlink::new(args).map(|s| Box::new(s) as Box<dyn AssertionType>)
+        });
 
         Self {
-            registry: Rc::new(RefCell::new(registry)),
+            registry: RefCell::new(registry),
         }
     }
 
     fn ok(&self, args: LuaMultiValue) -> Result<()> {
         if args.is_empty() {
-            bail!(FrorkError::NoOperation);
+            return Err(FrorkError::NoOperation.into());
         }
 
         let mut args_iter = args.into_iter();
-        let operation = args_iter
+        let assertion_type = args_iter
             .next()
             .and_then(|v| v.to_string().ok())
-            .ok_or_else(|| anyhow!("First argument must be operation name"))?;
+            .ok_or_else(|| {
+                FrorkError::InvalidArguments("First argument must be assertion type".to_string())
+            })?;
 
         let assertion_args: LuaMultiValue = args_iter.collect();
 
-        match self.registry.borrow().create(&operation, assertion_args)? {
-            Some(assertion) => {
-                let status = assertion.check();
-                match status {
-                    Status::Ok => println!("ok: {}", assertion.display()),
-                    Status::Missing => println!("missing: {}", assertion.display()),
-                }
-                Ok(())
-            }
-            None => bail!(FrorkError::UnknownOperation {
-                operation: operation.to_string()
-            }),
+        let assertion = self
+            .registry
+            .borrow()
+            .create(&assertion_type, assertion_args)?;
+        let status = assertion.status()?;
+        match status {
+            Status::Ok => println!("ok: {}", assertion.display()),
+            Status::Missing => println!("missing: {}", assertion.display()),
         }
+        Ok(())
     }
 
-    fn register(&self, name: &str, table: LuaTable) -> Result<()> {
-        let status_fn: LuaFunction = table
-            .get("status")
-            .map_err(|e| anyhow!("Failed to get status function: {}", e))?;
+    fn register(&self, name: &str, table: LuaTable) -> Result<(), FrorkError> {
+        let status_fn: LuaFunction = table.get("status")?;
 
         let name_clone = name.to_string();
         self.registry.borrow_mut().register(name, move |args| {
@@ -270,42 +292,35 @@ impl Frork {
     }
 }
 
-fn run(script_path: &str) -> Result<()> {
+fn run(script_path: &str) -> Result<(), FrorkError> {
     let lua = Lua::new();
 
     let fennel_code = include_str!("../fennel-1.6.0.lua");
-    let fennel_module = lua
-        .load(fennel_code)
-        .eval::<LuaValue>()
-        .map_err(|e| anyhow!("Failed to load Fennel: {}", e))?;
-    lua.register_module("fennel", fennel_module)
-        .map_err(|e| anyhow!("Failed to register Fennel module: {}", e))?;
+    let fennel_module = lua.load(fennel_code).eval::<LuaValue>()?;
+    lua.register_module("fennel", fennel_module)?;
 
     let frork = Frork::new();
-    let frork_module = frork
-        .bind(&lua)
-        .map_err(|e| anyhow!("Failed to create Frork module: {}", e))?;
-    lua.register_module("frork", frork_module)
-        .map_err(|e| anyhow!("Failed to register Frork module: {}", e))?;
+    let frork_module = frork.bind(&lua)?;
+    lua.register_module("frork", frork_module)?;
 
     lua.load(format!(
         r#"require("fennel").install().dofile("{}")"#,
         script_path
     ))
-    .exec()
-    .map_err(|e| anyhow!("Failed to execute script '{}': {}", script_path, e))?;
+    .exec()?;
 
     Ok(())
 }
 
-fn main() -> Result<()> {
+fn main() -> color_eyre::Result<()> {
+    color_eyre::install()?;
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
 
     match &cli.command {
         Commands::Check { script } => {
-            run(script)?;
+            run(script).wrap_err("Failed to run script")?;
         }
     }
 
