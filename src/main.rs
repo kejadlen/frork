@@ -99,9 +99,13 @@ impl Default for Registry {
             Debug::new(args).map(|d| Box::new(d) as Box<dyn AssertionType>)
         });
 
+        registry.register("directory", |args| {
+            Directory::new(args).map(|d| Box::new(d) as Box<dyn AssertionType>)
+        });
         registry.register("symlink", |args| {
             Symlink::new(args).map(|s| Box::new(s) as Box<dyn AssertionType>)
         });
+
         registry
     }
 }
@@ -196,6 +200,63 @@ impl AssertionType for Symlink {
         use std::os::unix::fs;
         fs::symlink(&self.source, &self.target)
             .map_err(|e| eyre!("Failed to create symlink: {}", e))?;
+        debug!("created: {}", self);
+        Ok(())
+    }
+}
+
+struct Directory {
+    path: String,
+}
+
+impl Directory {
+    fn new(args: LuaMultiValue) -> Result<Self> {
+        let args_vec: Vec<LuaValue> = args.into_vec();
+
+        if args_vec.len() != 1 {
+            return Err(FrorkError::InvalidArguments(format!(
+                "Directory requires exactly 1 argument, got {}",
+                args_vec.len()
+            ))
+            .into());
+        }
+
+        let path = args_vec[0]
+            .to_string()
+            .map_err(|_| FrorkError::InvalidArguments("Argument must be a string".to_string()))?;
+
+        let expanded_path = expand_tilde(&path);
+
+        Ok(Self {
+            path: expanded_path,
+        })
+    }
+}
+
+impl std::fmt::Display for Directory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "directory {}", self.path)
+    }
+}
+
+impl AssertionType for Directory {
+    fn status(&self) -> Result<Status> {
+        let path = Path::new(&self.path);
+        if path.is_dir() {
+            Ok(Status::Ok)
+        } else if path.exists() {
+            todo!(
+                "{}",
+                format!("directory {} exists but is not a directory", self.path)
+            );
+        } else {
+            Ok(Status::Missing)
+        }
+    }
+
+    fn install(&self) -> Result<()> {
+        std::fs::create_dir_all(&self.path)
+            .map_err(|e| eyre!("Failed to create directory: {}", e))?;
         debug!("created: {}", self);
         Ok(())
     }
