@@ -340,3 +340,70 @@ fn main() -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lua_assertion_ok_status() {
+        let lua = Lua::new();
+        let status_fn = lua
+            .create_function(|_lua, _args: LuaMultiValue| Ok("ok".to_string()))
+            .unwrap();
+
+        let assertion = LuaAssertion::new("test", LuaMultiValue::new(), status_fn);
+        let result = assertion.status().unwrap();
+
+        match result {
+            Status::Ok => {}
+            _ => panic!("Expected Status::Ok"),
+        }
+    }
+
+    #[test]
+    fn test_lua_assertion_missing_status() {
+        let lua = Lua::new();
+        let status_fn = lua
+            .create_function(|_lua, _args: LuaMultiValue| Ok("missing".to_string()))
+            .unwrap();
+
+        let assertion = LuaAssertion::new("test", LuaMultiValue::new(), status_fn);
+        let result = assertion.status().unwrap();
+
+        match result {
+            Status::Missing => {}
+            _ => panic!("Expected Status::Missing"),
+        }
+    }
+
+    #[test]
+    fn test_lua_assertion_invalid_status() {
+        let lua = Lua::new();
+        let status_fn = lua
+            .create_function(|_lua, _args: LuaMultiValue| Ok("invalid".to_string()))
+            .unwrap();
+
+        let assertion = LuaAssertion::new("test", LuaMultiValue::new(), status_fn);
+        let result = assertion.status();
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_lua_assertion_display() {
+        let lua = Lua::new();
+        let status_fn = lua
+            .create_function(|_lua, _args: LuaMultiValue| Ok("ok".to_string()))
+            .unwrap();
+
+        let args = vec![LuaValue::String(lua.create_string("arg1").unwrap())];
+        let lua_args = LuaMultiValue::from_vec(args);
+
+        let assertion = LuaAssertion::new("mytest", lua_args, status_fn);
+        let display = assertion.display();
+
+        assert!(display.contains("mytest"));
+        assert!(display.contains("arg1"));
+    }
+}
