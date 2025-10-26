@@ -122,30 +122,17 @@ struct Symlink {
 
 impl Symlink {
     fn new(args: LuaMultiValue) -> Result<Self> {
-        let args_vec: Vec<LuaValue> = args.into_vec();
+        let (target, source) =
+            <(String, String)>::from_lua_multi(args, &Lua::new()).map_err(|_| {
+                FrorkError::InvalidArguments(
+                    "Symlink requires exactly 2 string arguments".to_string(),
+                )
+            })?;
 
-        if args_vec.len() != 2 {
-            return Err(FrorkError::InvalidArguments(format!(
-                "Symlink requires exactly 2 arguments, got {}",
-                args_vec.len()
-            ))
-            .into());
-        }
-
-        let strings: Vec<String> = args_vec
-            .into_iter()
-            .map(|val| {
-                val.to_string()
-                    .map(|s| Utils::expand_path(&s))
-                    .map_err(|_| {
-                        FrorkError::InvalidArguments("Arguments must be strings".to_string())
-                    })
-            })
-            .collect::<Result<_, _>>()?;
-
-        let [target, source]: [String; 2] = strings.try_into().unwrap();
-
-        Ok(Self { target, source })
+        Ok(Self {
+            target: Utils::expand_path(&target),
+            source: Utils::expand_path(&source),
+        })
     }
 }
 
@@ -199,24 +186,12 @@ struct Directory {
 
 impl Directory {
     fn new(args: LuaMultiValue) -> Result<Self> {
-        let args_vec: Vec<LuaValue> = args.into_vec();
-
-        if args_vec.len() != 1 {
-            return Err(FrorkError::InvalidArguments(format!(
-                "Directory requires exactly 1 argument, got {}",
-                args_vec.len()
-            ))
-            .into());
-        }
-
-        let path = args_vec[0]
-            .to_string()
-            .map_err(|_| FrorkError::InvalidArguments("Argument must be a string".to_string()))?;
-
-        let expanded_path = Utils::expand_path(&path);
+        let path = String::from_lua_multi(args, &Lua::new()).map_err(|_| {
+            FrorkError::InvalidArguments("Directory requires exactly 1 string argument".to_string())
+        })?;
 
         Ok(Self {
-            path: expanded_path,
+            path: Utils::expand_path(&path),
         })
     }
 }
@@ -257,25 +232,9 @@ struct Debug {
 
 impl Debug {
     fn new(args: LuaMultiValue) -> Result<Self> {
-        let args_vec: Vec<LuaValue> = args.into_vec();
-
-        if args_vec.len() != 1 {
-            return Err(FrorkError::InvalidArguments(format!(
-                "Debug requires exactly 1 argument, got {}",
-                args_vec.len()
-            ))
-            .into());
-        }
-
-        let table = match &args_vec[0] {
-            LuaValue::Table(t) => t.clone(),
-            _ => {
-                return Err(FrorkError::InvalidArguments(
-                    "Debug argument must be a table".to_string(),
-                )
-                .into());
-            }
-        };
+        let table = LuaTable::from_lua_multi(args, &Lua::new()).map_err(|_| {
+            FrorkError::InvalidArguments("Debug requires exactly 1 table argument".to_string())
+        })?;
 
         let status_fn: Option<LuaFunction> = table.get("status").ok();
         let install_fn: Option<LuaFunction> = table.get("install").ok();
