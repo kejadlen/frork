@@ -285,7 +285,10 @@ impl Default for Frork {
 }
 
 impl Frork {
-    fn lua_table(lua: &Lua) -> Result<LuaTable> {
+    fn lua_table<F>(lua: &Lua, handle_status: F) -> Result<LuaTable>
+    where
+        F: Fn(&Status, &dyn AssertionType) -> Result<()> + Clone + 'static,
+    {
         let frork_table = lua.create_table().map_err(FrorkError::from)?;
         let frork = Rc::new(Self::default());
 
@@ -301,10 +304,12 @@ impl Frork {
             .map_err(FrorkError::from)?;
 
         let frork_clone = frork.clone();
-        let status_fn = lua
-            .create_function(move |_lua, args: LuaMultiValue| frork_clone.status(args))
+        let ok_fn = lua
+            .create_function(move |_lua, args: LuaMultiValue| {
+                frork_clone.ok(args, handle_status.clone())
+            })
             .map_err(FrorkError::from)?;
-        frork_table.set("ok", status_fn).map_err(FrorkError::from)?;
+        frork_table.set("ok", ok_fn).map_err(FrorkError::from)?;
 
         Ok(frork_table)
     }
@@ -328,7 +333,10 @@ impl Frork {
         Ok(())
     }
 
-    fn status(&self, args: LuaMultiValue) -> LuaResult<()> {
+    fn ok<F>(&self, args: LuaMultiValue, handle_status: F) -> LuaResult<()>
+    where
+        F: Fn(&Status, &dyn AssertionType) -> Result<()>,
+    {
         if args.is_empty() {
             return Err(LuaError::external(FrorkError::NoOperation));
         }
@@ -347,15 +355,16 @@ impl Frork {
             .create(&assertion_type, assertion_args)
             .map_err(LuaError::external)?;
         let status = assertion.status().map_err(LuaError::external)?;
-        match status {
-            Status::Ok => println!("ok: {}", assertion.display()),
-            Status::Missing => println!("missing: {}", assertion.display()),
-        }
+
+        handle_status(&status, assertion.as_ref()).map_err(LuaError::external)?;
         Ok(())
     }
 }
 
-fn run_script(script: &str) -> Result<()> {
+fn run_script(
+    script: &str,
+    handle_status: impl Fn(&Status, &dyn AssertionType) -> Result<()> + Clone + 'static,
+) -> Result<()> {
     let lua = Lua::new();
 
     let fennel_code = include_str!("../fennel-1.6.0.lua");
@@ -366,7 +375,8 @@ fn run_script(script: &str) -> Result<()> {
     lua.register_module("fennel", fennel_module)
         .map_err(|e| eyre!("Failed to register Fennel module: {}", e))?;
 
-    let frork_module = Frork::lua_table(&lua).wrap_err("Failed to create Frork module")?;
+    let frork_module =
+        Frork::lua_table(&lua, handle_status).wrap_err("Failed to create Frork module")?;
     lua.register_module("frork", frork_module)
         .map_err(|e| eyre!("Failed to register Frork module: {}", e))?;
 
@@ -382,8 +392,24 @@ fn run_script(script: &str) -> Result<()> {
 
 fn run(command: &Commands) -> Result<()> {
     match command {
-        Commands::Status { script } => run_script(script),
-        Commands::Satisfy { script } => run_script(script),
+        Commands::Status { script } => run_script(script, |status, assertion| {
+            match status {
+                Status::Ok => println!("ok: {}", assertion.display()),
+                Status::Missing => println!("missing: {}", assertion.display()),
+            }
+            Ok(())
+        }),
+        Commands::Satisfy { script } => run_script(script, |status, assertion| {
+            match status {
+                Status::Ok => println!("ok: {}", assertion.display()),
+                Status::Missing => {
+                    println!("missing: {}", assertion.display());
+                    assertion.install()?;
+                    println!("ok: {}", assertion.display());
+                }
+            }
+            Ok(())
+        }),
     }
 }
 
