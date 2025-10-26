@@ -469,10 +469,7 @@ impl Frork {
             .map_err(FrorkError::from)?;
         frork_table.set("ok", ok_fn).map_err(FrorkError::from)?;
 
-        let utils_table = Utils::lua_table(lua).map_err(FrorkError::from)?;
-        frork_table
-            .set("utils", utils_table)
-            .map_err(FrorkError::from)?;
+        frork_table.set("utils", Utils {}).map_err(FrorkError::from)?;
 
         Ok(frork_table)
     }
@@ -526,8 +523,8 @@ impl Frork {
 
 struct Utils;
 
-impl Utils {
-    fn lua_table(lua: &Lua) -> LuaResult<LuaTable> {
+impl IntoLua for Utils {
+    fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
         let utils_table = lua.create_table()?;
 
         let dirname_fn = lua.create_function(|_lua, path: String| {
@@ -544,7 +541,7 @@ impl Utils {
 
         utils_table.set("dirname", dirname_fn)?;
 
-        Ok(utils_table)
+        Ok(LuaValue::Table(utils_table))
     }
 }
 
