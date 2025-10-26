@@ -8,6 +8,7 @@ color-eyre = "*"
 clap = { version = "*", features = ["derive"] }
 facet = "*"
 mlua = { version = "*", features = ["lua54", "vendored"] }
+regex = "*"
 thiserror = "*"
 tracing = "*"
 tracing-subscriber = "*"

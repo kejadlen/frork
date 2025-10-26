@@ -4,12 +4,14 @@ use color_eyre::{
     eyre::{WrapErr, eyre},
 };
 use mlua::prelude::*;
+use regex::Regex;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::LazyLock;
 use thiserror::Error;
 use tracing::{debug, info};
 
@@ -60,16 +62,28 @@ impl From<LuaError> for FrorkError {
     }
 }
 
-fn expand_tilde(path: &str) -> String {
-    if path.starts_with('~') {
+static ENV_VAR_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\$([A-Za-z_][A-Za-z0-9_]*)").unwrap());
+
+fn expand_path(path: &str) -> String {
+    let mut expanded = path.to_string();
+
+    // Expand tilde
+    if expanded.starts_with('~') {
         if let Ok(home) = env::var("HOME") {
-            path.replacen('~', &home, 1)
-        } else {
-            path.to_string()
+            expanded = expanded.replacen('~', &home, 1);
         }
-    } else {
-        path.to_string()
     }
+
+    // Expand environment variables using regex
+    expanded = ENV_VAR_REGEX
+        .replace_all(&expanded, |caps: &regex::Captures| {
+            let var_name = caps.get(1).unwrap().as_str();
+            env::var(var_name).unwrap_or_else(|_| caps.get(0).unwrap().as_str().to_string())
+        })
+        .to_string();
+
+    expanded
 }
 
 #[derive(Debug)]
@@ -149,7 +163,7 @@ impl Symlink {
         let strings: Vec<String> = args_vec
             .into_iter()
             .map(|val| {
-                val.to_string().map(|s| expand_tilde(&s)).map_err(|_| {
+                val.to_string().map(|s| expand_path(&s)).map_err(|_| {
                     FrorkError::InvalidArguments("Arguments must be strings".to_string())
                 })
             })
@@ -225,7 +239,7 @@ impl Directory {
             .to_string()
             .map_err(|_| FrorkError::InvalidArguments("Argument must be a string".to_string()))?;
 
-        let expanded_path = expand_tilde(&path);
+        let expanded_path = expand_path(&path);
 
         Ok(Self {
             path: expanded_path,
