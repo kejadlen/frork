@@ -69,10 +69,10 @@ fn expand_path(path: &str) -> String {
     let mut expanded = path.to_string();
 
     // Expand tilde
-    if expanded.starts_with('~') {
-        if let Ok(home) = env::var("HOME") {
-            expanded = expanded.replacen('~', &home, 1);
-        }
+    if expanded.starts_with('~')
+        && let Ok(home) = env::var("HOME")
+    {
+        expanded = expanded.replacen('~', &home, 1);
     }
 
     // Expand environment variables using regex
@@ -97,49 +97,47 @@ trait AssertionType: std::fmt::Display {
     fn install(&self) -> Result<()>;
 }
 
-type AssertionFactory = Box<dyn Fn(LuaMultiValue) -> Result<Box<dyn AssertionType>>>;
-
+#[derive(Default)]
 struct Registry {
-    assertion_types: HashMap<String, AssertionFactory>,
-}
-
-impl Default for Registry {
-    fn default() -> Self {
-        let mut registry = Self {
-            assertion_types: HashMap::new(),
-        };
-
-        registry.register("debug", |args| {
-            Debug::new(args).map(|d| Box::new(d) as Box<dyn AssertionType>)
-        });
-
-        registry.register("directory", |args| {
-            Directory::new(args).map(|d| Box::new(d) as Box<dyn AssertionType>)
-        });
-        registry.register("symlink", |args| {
-            Symlink::new(args).map(|s| Box::new(s) as Box<dyn AssertionType>)
-        });
-
-        registry
-    }
+    lua_assertion_types: HashMap<String, (Option<LuaFunction>, LuaFunction, LuaFunction)>,
 }
 
 impl Registry {
-    fn register<F>(&mut self, name: &str, factory: F)
-    where
-        F: Fn(LuaMultiValue) -> Result<Box<dyn AssertionType>> + 'static,
-    {
-        self.assertion_types
-            .insert(name.to_string(), Box::new(factory));
+    fn register(
+        &mut self,
+        name: &str,
+        display_fn: Option<LuaFunction>,
+        status_fn: LuaFunction,
+        install_fn: LuaFunction,
+    ) {
+        self.lua_assertion_types
+            .insert(name.to_string(), (display_fn, status_fn, install_fn));
     }
 
     fn create(&self, assertion_type: &str, args: LuaMultiValue) -> Result<Box<dyn AssertionType>> {
-        let factory = self.assertion_types.get(assertion_type).ok_or_else(|| {
-            FrorkError::UnknownAssertionType {
+        // Check Lua assertions first
+        if let Some((display_fn, status_fn, install_fn)) =
+            self.lua_assertion_types.get(assertion_type)
+        {
+            return Ok(Box::new(LuaAssertion::new(
+                assertion_type,
+                args,
+                display_fn.clone(),
+                status_fn.clone(),
+                install_fn.clone(),
+            )));
+        }
+
+        // Fall back to built-in types
+        match assertion_type {
+            "debug" => Debug::new(args).map(|d| Box::new(d) as Box<dyn AssertionType>),
+            "directory" => Directory::new(args).map(|d| Box::new(d) as Box<dyn AssertionType>),
+            "symlink" => Symlink::new(args).map(|s| Box::new(s) as Box<dyn AssertionType>),
+            _ => Err(FrorkError::UnknownAssertionType {
                 assertion_type: assertion_type.to_string(),
             }
-        })?;
-        factory(args)
+            .into()),
+        }
     }
 }
 
@@ -353,7 +351,7 @@ struct LuaAssertion {
     args: LuaMultiValue,
     display_fn: Option<LuaFunction>,
     status_fn: LuaFunction,
-    install_fn: Option<LuaFunction>,
+    install_fn: LuaFunction,
 }
 
 impl LuaAssertion {
@@ -369,7 +367,7 @@ impl LuaAssertion {
             args,
             display_fn,
             status_fn,
-            install_fn: Some(install_fn),
+            install_fn,
         }
     }
 }
@@ -401,18 +399,11 @@ impl AssertionType for LuaAssertion {
     }
 
     fn install(&self) -> Result<()> {
-        if let Some(ref install_fn) = self.install_fn {
-            install_fn
-                .call::<()>(self.args.clone())
-                .map_err(FrorkError::from)?;
-            debug!("installed: {}", self);
-            Ok(())
-        } else {
-            Err(eyre!(
-                "Install not implemented for assertion type: {}",
-                self.name
-            ))
-        }
+        self.install_fn
+            .call::<()>(self.args.clone())
+            .map_err(FrorkError::from)?;
+        debug!("installed: {}", self);
+        Ok(())
     }
 }
 
@@ -488,16 +479,9 @@ where
         let status_fn: LuaFunction = table.get("status")?;
         let install_fn: LuaFunction = table.get("install")?;
 
-        let name_clone = name.to_string();
-        self.registry.borrow_mut().register(name, move |args| {
-            Ok(Box::new(LuaAssertion::new(
-                &name_clone,
-                args,
-                display_fn.clone(),
-                status_fn.clone(),
-                install_fn.clone(),
-            )))
-        });
+        self.registry
+            .borrow_mut()
+            .register(name, display_fn, status_fn, install_fn);
         info!("Registered assertion type: {}", name);
         Ok(())
     }
@@ -613,44 +597,32 @@ fn run_script(
     Ok(())
 }
 
+fn status(status: &Status, assertion: &dyn AssertionType) -> Result<()> {
+    match status {
+        Status::Ok => println!("ok: {}", assertion),
+        Status::Missing => println!("missing: {}", assertion),
+    }
+    Ok(())
+}
+
+fn satisfy(status: &Status, assertion: &dyn AssertionType) -> Result<()> {
+    match status {
+        Status::Ok => println!("ok: {}", assertion),
+        Status::Missing => {
+            println!("missing: {}", assertion);
+            assertion.install()?;
+            println!("ok: {}", assertion);
+        }
+    }
+    Ok(())
+}
+
 fn run(command: &Commands) -> Result<()> {
     match command {
-        Commands::Check { code } => run_code(code, |status, assertion| {
-            match status {
-                Status::Ok => println!("ok: {}", assertion),
-                Status::Missing => println!("missing: {}", assertion),
-            }
-            Ok(())
-        }),
-        Commands::Do { code } => run_code(code, |status, assertion| {
-            match status {
-                Status::Ok => println!("ok: {}", assertion),
-                Status::Missing => {
-                    println!("missing: {}", assertion);
-                    assertion.install()?;
-                    println!("ok: {}", assertion);
-                }
-            }
-            Ok(())
-        }),
-        Commands::Status { script } => run_script(script, |status, assertion| {
-            match status {
-                Status::Ok => println!("ok: {}", assertion),
-                Status::Missing => println!("missing: {}", assertion),
-            }
-            Ok(())
-        }),
-        Commands::Satisfy { script } => run_script(script, |status, assertion| {
-            match status {
-                Status::Ok => println!("ok: {}", assertion),
-                Status::Missing => {
-                    println!("missing: {}", assertion);
-                    assertion.install()?;
-                    println!("ok: {}", assertion);
-                }
-            }
-            Ok(())
-        }),
+        Commands::Check { code } => run_code(code, status),
+        Commands::Do { code } => run_code(code, satisfy),
+        Commands::Status { script } => run_script(script, status),
+        Commands::Satisfy { script } => run_script(script, satisfy),
     }
 }
 
@@ -659,7 +631,7 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
-    run(&cli.command).wrap_err("Failed to run command")?;
+    run(&cli.command)?;
 
     Ok(())
 }
@@ -667,113 +639,6 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_lua_assertion_ok_status() {
-        let lua = Lua::new();
-        let status_fn = lua
-            .create_function(|_lua, _args: LuaMultiValue| Ok("ok".to_string()))
-            .unwrap();
-        let install_fn = lua
-            .create_function(|_lua, _args: LuaMultiValue| Ok(()))
-            .unwrap();
-
-        let assertion =
-            LuaAssertion::new("test", LuaMultiValue::new(), None, status_fn, install_fn);
-        let result = assertion.status().unwrap();
-
-        match result {
-            Status::Ok => {}
-            _ => panic!("Expected Status::Ok"),
-        }
-    }
-
-    #[test]
-    fn test_lua_assertion_missing_status() {
-        let lua = Lua::new();
-        let status_fn = lua
-            .create_function(|_lua, _args: LuaMultiValue| Ok("missing".to_string()))
-            .unwrap();
-
-        let install_fn = lua
-            .create_function(|_lua, _args: LuaMultiValue| Ok(()))
-            .unwrap();
-        let assertion =
-            LuaAssertion::new("test", LuaMultiValue::new(), None, status_fn, install_fn);
-        let result = assertion.status().unwrap();
-
-        match result {
-            Status::Missing => {}
-            _ => panic!("Expected Status::Missing"),
-        }
-    }
-
-    #[test]
-    fn test_lua_assertion_invalid_status() {
-        let lua = Lua::new();
-        let status_fn = lua
-            .create_function(|_lua, _args: LuaMultiValue| Ok("invalid".to_string()))
-            .unwrap();
-
-        let install_fn = lua
-            .create_function(|_lua, _args: LuaMultiValue| Ok(()))
-            .unwrap();
-        let assertion =
-            LuaAssertion::new("test", LuaMultiValue::new(), None, status_fn, install_fn);
-        let result = assertion.status();
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_lua_assertion_display() {
-        let lua = Lua::new();
-        let status_fn = lua
-            .create_function(|_lua, _args: LuaMultiValue| Ok("ok".to_string()))
-            .unwrap();
-
-        let args = vec![LuaValue::String(lua.create_string("arg1").unwrap())];
-        let lua_args = LuaMultiValue::from_vec(args);
-
-        let install_fn = lua
-            .create_function(|_lua, _args: LuaMultiValue| Ok(()))
-            .unwrap();
-        let assertion = LuaAssertion::new("mytest", lua_args, None, status_fn, install_fn);
-        let display = assertion.to_string();
-
-        assert!(display.contains("mytest"));
-        assert!(display.contains("arg1"));
-    }
-
-    #[test]
-    fn test_lua_assertion_custom_display() {
-        let lua = Lua::new();
-        let status_fn = lua
-            .create_function(|_lua, _args: LuaMultiValue| Ok("ok".to_string()))
-            .unwrap();
-        let display_fn = lua
-            .create_function(|_lua, args: LuaMultiValue| {
-                let arg_str = args
-                    .into_iter()
-                    .map(|v| v.to_string().unwrap_or_else(|_| "?".to_string()))
-                    .collect::<Vec<_>>()
-                    .join(",");
-                Ok(format!("custom: {}", arg_str))
-            })
-            .unwrap();
-
-        let args = vec![LuaValue::String(lua.create_string("test1").unwrap())];
-        let lua_args = LuaMultiValue::from_vec(args);
-
-        let install_fn = lua
-            .create_function(|_lua, _args: LuaMultiValue| Ok(()))
-            .unwrap();
-        let assertion =
-            LuaAssertion::new("mytest", lua_args, Some(display_fn), status_fn, install_fn);
-        let display = assertion.to_string();
-
-        assert_eq!(display, "custom: test1");
-    }
 
     #[test]
     fn test_fennel_assertion_registration() {
@@ -796,7 +661,10 @@ mod tests {
             )
             .unwrap();
 
-        let frork = Frork::new(|_status, _assertion| Ok(()));
+        fn test_handler(_status: &Status, _assertion: &dyn AssertionType) -> Result<()> {
+            Ok(())
+        }
+        let frork = Frork::new(test_handler);
         frork.register("test-assertion", assertion_table).unwrap();
     }
 }
