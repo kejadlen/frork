@@ -47,6 +47,7 @@ pub enum FrorkError {
     Lua(String),
 }
 
+// TODO does this actually work the way I think it does? write a test to find out
 impl From<LuaError> for FrorkError {
     fn from(err: LuaError) -> Self {
         match err {
@@ -60,30 +61,6 @@ impl From<LuaError> for FrorkError {
             _ => FrorkError::Lua(err.to_string()),
         }
     }
-}
-
-static ENV_VAR_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\$([A-Za-z_][A-Za-z0-9_]*)").unwrap());
-
-fn expand_path(path: &str) -> String {
-    let mut expanded = path.to_string();
-
-    // Expand tilde
-    if expanded.starts_with('~')
-        && let Ok(home) = env::var("HOME")
-    {
-        expanded = expanded.replacen('~', &home, 1);
-    }
-
-    // Expand environment variables using regex
-    expanded = ENV_VAR_REGEX
-        .replace_all(&expanded, |caps: &regex::Captures| {
-            let var_name = caps.get(1).unwrap().as_str();
-            env::var(var_name).unwrap_or_else(|_| caps.get(0).unwrap().as_str().to_string())
-        })
-        .to_string();
-
-    expanded
 }
 
 #[derive(Debug)]
@@ -161,9 +138,11 @@ impl Symlink {
         let strings: Vec<String> = args_vec
             .into_iter()
             .map(|val| {
-                val.to_string().map(|s| expand_path(&s)).map_err(|_| {
-                    FrorkError::InvalidArguments("Arguments must be strings".to_string())
-                })
+                val.to_string()
+                    .map(|s| Utils::expand_path(&s))
+                    .map_err(|_| {
+                        FrorkError::InvalidArguments("Arguments must be strings".to_string())
+                    })
             })
             .collect::<Result<_, _>>()?;
 
@@ -237,7 +216,7 @@ impl Directory {
             .to_string()
             .map_err(|_| FrorkError::InvalidArguments("Argument must be a string".to_string()))?;
 
-        let expanded_path = expand_path(&path);
+        let expanded_path = Utils::expand_path(&path);
 
         Ok(Self {
             path: expanded_path,
@@ -513,22 +492,48 @@ where
 
 struct Utils;
 
+impl Utils {
+    fn expand_path(path: &str) -> String {
+        static ENV_VAR_REGEX: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"\$([A-Za-z_][A-Za-z0-9_]*)").unwrap());
+
+        let mut expanded = path.to_string();
+
+        // Expand tilde
+        if expanded.starts_with('~')
+            && let Ok(home) = env::var("HOME")
+        {
+            expanded = expanded.replacen('~', &home, 1);
+        }
+
+        // Expand environment variables using regex
+        expanded = ENV_VAR_REGEX
+            .replace_all(&expanded, |caps: &regex::Captures| {
+                let var_name = caps.get(1).unwrap().as_str();
+                env::var(var_name).unwrap_or_else(|_| caps.get(0).unwrap().as_str().to_string())
+            })
+            .to_string();
+
+        expanded
+    }
+
+    fn dirname(path: &str) -> Option<String> {
+        let expanded_path = Self::expand_path(path);
+        let parent = Path::new(&expanded_path).parent()?;
+        parent.to_str().map(|s| s.to_string())
+    }
+}
+
 impl IntoLua for Utils {
     fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
         let utils_table = lua.create_table()?;
 
-        let dirname_fn = lua.create_function(|_lua, path: String| {
-            let expanded_path = expand_path(&path);
-            let Some(parent) = Path::new(&expanded_path).parent() else {
-                return Ok(None);
-            };
+        let expand_path_fn =
+            lua.create_function(|_lua, path: String| Ok(Utils::expand_path(&path)))?;
 
-            parent
-                .to_str()
-                .map(|s| Some(s.to_string()))
-                .ok_or_else(|| LuaError::RuntimeError("Path contains invalid UTF-8".to_string()))
-        })?;
+        let dirname_fn = lua.create_function(|_lua, path: String| Ok(Utils::dirname(&path)))?;
 
+        utils_table.set("expand_path", expand_path_fn)?;
         utils_table.set("dirname", dirname_fn)?;
 
         Ok(LuaValue::Table(utils_table))
