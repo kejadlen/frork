@@ -78,8 +78,7 @@ enum Status {
     Missing,
 }
 
-trait AssertionType {
-    fn display(&self) -> String;
+trait AssertionType: std::fmt::Display {
     fn status(&self) -> Result<Status>;
     fn install(&self) -> Result<()>;
 }
@@ -158,11 +157,13 @@ impl Symlink {
     }
 }
 
-impl AssertionType for Symlink {
-    fn display(&self) -> String {
-        format!("symlink {} {}", self.target, self.source)
+impl std::fmt::Display for Symlink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "symlink {} {}", self.target, self.source)
     }
+}
 
+impl AssertionType for Symlink {
     fn status(&self) -> Result<Status> {
         if !Path::new(&self.target).exists() {
             return Ok(Status::Missing);
@@ -195,7 +196,7 @@ impl AssertionType for Symlink {
         use std::os::unix::fs;
         fs::symlink(&self.source, &self.target)
             .map_err(|e| eyre!("Failed to create symlink: {}", e))?;
-        debug!("created: {}", self.display());
+        debug!("created: {}", self);
         Ok(())
     }
 }
@@ -240,17 +241,20 @@ impl Debug {
     }
 }
 
-impl AssertionType for Debug {
-    fn display(&self) -> String {
+impl std::fmt::Display for Debug {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(ref display_fn) = self.display_fn {
-            display_fn
+            let result = display_fn
                 .call::<String>(LuaMultiValue::new())
-                .unwrap_or_else(|_| "debug".to_string())
+                .unwrap_or_else(|_| "debug".to_string());
+            write!(f, "{}", result)
         } else {
-            "debug".to_string()
+            write!(f, "debug")
         }
     }
+}
 
+impl AssertionType for Debug {
     fn status(&self) -> Result<Status> {
         if let Some(ref status_fn) = self.status_fn {
             let result = status_fn
@@ -267,7 +271,7 @@ impl AssertionType for Debug {
     }
 
     fn install(&self) -> Result<()> {
-        info!("debug: installing {}", self.display());
+        info!("debug: installing {}", self);
         let install_fn = self
             .install_fn
             .as_ref()
@@ -305,17 +309,20 @@ impl LuaAssertion {
     }
 }
 
-impl AssertionType for LuaAssertion {
-    fn display(&self) -> String {
+impl std::fmt::Display for LuaAssertion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(ref display_fn) = self.display_fn {
-            display_fn
+            let result = display_fn
                 .call::<String>(self.args.clone())
-                .unwrap_or_else(|_| self.default_display())
+                .unwrap_or_else(|_| self.default_display());
+            write!(f, "{}", result)
         } else {
-            self.default_display()
+            write!(f, "{}", self.default_display())
         }
     }
+}
 
+impl AssertionType for LuaAssertion {
     fn status(&self) -> Result<Status> {
         let result = self
             .status_fn
@@ -333,7 +340,7 @@ impl AssertionType for LuaAssertion {
             install_fn
                 .call::<()>(self.args.clone())
                 .map_err(FrorkError::from)?;
-            debug!("installed: {}", self.display());
+            debug!("installed: {}", self);
             Ok(())
         } else {
             Err(eyre!(
@@ -515,36 +522,36 @@ fn run(command: &Commands) -> Result<()> {
     match command {
         Commands::Check { code } => run_code(code, |status, assertion| {
             match status {
-                Status::Ok => println!("ok: {}", assertion.display()),
-                Status::Missing => println!("missing: {}", assertion.display()),
+                Status::Ok => println!("ok: {}", assertion),
+                Status::Missing => println!("missing: {}", assertion),
             }
             Ok(())
         }),
         Commands::Do { code } => run_code(code, |status, assertion| {
             match status {
-                Status::Ok => println!("ok: {}", assertion.display()),
+                Status::Ok => println!("ok: {}", assertion),
                 Status::Missing => {
-                    println!("missing: {}", assertion.display());
+                    println!("missing: {}", assertion);
                     assertion.install()?;
-                    println!("ok: {}", assertion.display());
+                    println!("ok: {}", assertion);
                 }
             }
             Ok(())
         }),
         Commands::Status { script } => run_script(script, |status, assertion| {
             match status {
-                Status::Ok => println!("ok: {}", assertion.display()),
-                Status::Missing => println!("missing: {}", assertion.display()),
+                Status::Ok => println!("ok: {}", assertion),
+                Status::Missing => println!("missing: {}", assertion),
             }
             Ok(())
         }),
         Commands::Satisfy { script } => run_script(script, |status, assertion| {
             match status {
-                Status::Ok => println!("ok: {}", assertion.display()),
+                Status::Ok => println!("ok: {}", assertion),
                 Status::Missing => {
-                    println!("missing: {}", assertion.display());
+                    println!("missing: {}", assertion);
                     assertion.install()?;
-                    println!("ok: {}", assertion.display());
+                    println!("ok: {}", assertion);
                 }
             }
             Ok(())
@@ -637,7 +644,7 @@ mod tests {
             .create_function(|_lua, _args: LuaMultiValue| Ok(()))
             .unwrap();
         let assertion = LuaAssertion::new("mytest", lua_args, None, status_fn, install_fn);
-        let display = assertion.display();
+        let display = assertion.to_string();
 
         assert!(display.contains("mytest"));
         assert!(display.contains("arg1"));
@@ -668,7 +675,7 @@ mod tests {
             .unwrap();
         let assertion =
             LuaAssertion::new("mytest", lua_args, Some(display_fn), status_fn, install_fn);
-        let display = assertion.display();
+        let display = assertion.to_string();
 
         assert_eq!(display, "custom: test1");
     }
