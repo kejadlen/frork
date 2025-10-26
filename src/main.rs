@@ -23,7 +23,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Check { script: String },
+    Status { script: String },
     Satisfy { script: String },
 }
 
@@ -290,21 +290,22 @@ impl Frork {
         let frork = Rc::new(Self::default());
 
         let frork_clone = frork.clone();
-        let check_fn = lua
-            .create_function(move |_lua, args: LuaMultiValue| frork_clone.check(args))
-            .map_err(FrorkError::from)?;
-
-        let frork_clone = frork.clone();
         let register_fn = lua
             .create_function(move |_lua, (name, table): (String, LuaTable)| {
                 frork_clone.register(&name, table)
             })
             .map_err(FrorkError::from)?;
 
-        frork_table.set("ok", check_fn).map_err(FrorkError::from)?;
         frork_table
             .set("register", register_fn)
             .map_err(FrorkError::from)?;
+
+        let frork_clone = frork.clone();
+        let status_fn = lua
+            .create_function(move |_lua, args: LuaMultiValue| frork_clone.status(args))
+            .map_err(FrorkError::from)?;
+        frork_table.set("ok", status_fn).map_err(FrorkError::from)?;
+
         Ok(frork_table)
     }
 
@@ -327,7 +328,7 @@ impl Frork {
         Ok(())
     }
 
-    fn check(&self, args: LuaMultiValue) -> LuaResult<()> {
+    fn status(&self, args: LuaMultiValue) -> LuaResult<()> {
         if args.is_empty() {
             return Err(LuaError::external(FrorkError::NoOperation));
         }
@@ -347,8 +348,8 @@ impl Frork {
             .map_err(LuaError::external)?;
         let status = assertion.status().map_err(LuaError::external)?;
         match status {
-            Status::Ok => debug!("ok: {}", assertion.display()),
-            Status::Missing => debug!("missing: {}", assertion.display()),
+            Status::Ok => println!("ok: {}", assertion.display()),
+            Status::Missing => println!("missing: {}", assertion.display()),
         }
         Ok(())
     }
@@ -381,7 +382,7 @@ fn run_script(script: &str) -> Result<()> {
 
 fn run(command: &Commands) -> Result<()> {
     match command {
-        Commands::Check { script } => run_script(script),
+        Commands::Status { script } => run_script(script),
         Commands::Satisfy { script } => run_script(script),
     }
 }
