@@ -13,7 +13,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::LazyLock;
 use thiserror::Error;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 #[derive(Parser)]
 #[command(name = "frork")]
@@ -353,13 +353,26 @@ impl LuaAssertion {
 
 impl std::fmt::Display for LuaAssertion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let default_display = || {
+            let args_str = self
+                .args
+                .iter()
+                .map(|v| v.to_string().unwrap_or_else(|_| "?".to_string()))
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("{} {}", self.name, args_str)
+        };
+
         if let Some(ref display_fn) = self.display_fn {
             let result = display_fn
                 .call::<String>(self.args.clone())
-                .unwrap_or_else(|_| self.default_display());
+                .unwrap_or_else(|err| {
+                    error!("Display function failed for {}: {}", self.name, err);
+                    default_display()
+                });
             write!(f, "{}", result)
         } else {
-            write!(f, "{}", self.default_display())
+            write!(f, "{}", default_display())
         }
     }
 }
@@ -383,18 +396,6 @@ impl AssertionType for LuaAssertion {
             .map_err(FrorkError::from)?;
         debug!("installed: {}", self);
         Ok(())
-    }
-}
-
-impl LuaAssertion {
-    fn default_display(&self) -> String {
-        let args_str = self
-            .args
-            .iter()
-            .map(|v| v.to_string().unwrap_or_else(|_| "?".to_string()))
-            .collect::<Vec<_>>()
-            .join(" ");
-        format!("{} {}", self.name, args_str)
     }
 }
 
