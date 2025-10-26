@@ -24,6 +24,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Check { code: String },
+    Do { code: String },
     Status { script: String },
     Satisfy { script: String },
 }
@@ -267,11 +268,13 @@ impl AssertionType for Debug {
 
     fn install(&self) -> Result<()> {
         info!("debug: installing {}", self.display());
-        if let Some(ref install_fn) = self.install_fn {
-            install_fn
-                .call::<()>(LuaMultiValue::new())
-                .map_err(|e| eyre!("Debug install function failed: {}", e))?;
-        }
+        let install_fn = self
+            .install_fn
+            .as_ref()
+            .ok_or_else(|| eyre!("Install not implemented for debug assertion"))?;
+        install_fn
+            .call::<()>(LuaMultiValue::new())
+            .map_err(|e| eyre!("Debug install function failed: {}", e))?;
         Ok(())
     }
 }
@@ -458,6 +461,35 @@ fn setup_fennel() -> Result<Lua> {
     Ok(lua)
 }
 
+fn run_code(
+    code: &str,
+    handle_status: impl Fn(&Status, &dyn AssertionType) -> Result<()> + Clone + 'static,
+) -> Result<()> {
+    let lua = setup_fennel()?;
+
+    let frork = Rc::new(Frork::default());
+    let frork_clone = frork.clone();
+    let ok_fn = lua
+        .create_function(move |_lua, args: LuaMultiValue| {
+            frork_clone.ok(args, handle_status.clone())
+        })
+        .map_err(|e| eyre!("Failed to create ok function: {}", e))?;
+    lua.globals()
+        .set("ok", ok_fn)
+        .map_err(|e| eyre!("Failed to set ok global: {}", e))?;
+
+    let eval_fn: LuaFunction = lua
+        .load("return require('fennel').eval")
+        .eval()
+        .map_err(|e| eyre!("Failed to get fennel.eval: {}", e))?;
+
+    eval_fn
+        .call::<()>(code)
+        .map_err(|e| eyre!("Failed to execute fennel code: {}", e))?;
+
+    Ok(())
+}
+
 fn run_script(
     script: &str,
     handle_status: impl Fn(&Status, &dyn AssertionType) -> Result<()> + Clone + 'static,
@@ -481,39 +513,24 @@ fn run_script(
 
 fn run(command: &Commands) -> Result<()> {
     match command {
-        Commands::Check { code } => {
-            let lua = setup_fennel()?;
-
-            let handle_status = |status: &Status, assertion: &dyn AssertionType| {
-                match status {
-                    Status::Ok => println!("ok: {}", assertion.display()),
-                    Status::Missing => println!("missing: {}", assertion.display()),
-                }
-                Ok(())
-            };
-
-            let frork = Rc::new(Frork::default());
-            let frork_clone = frork.clone();
-            let ok_fn = lua
-                .create_function(move |_lua, args: LuaMultiValue| {
-                    frork_clone.ok(args, handle_status)
-                })
-                .map_err(|e| eyre!("Failed to create ok function: {}", e))?;
-            lua.globals()
-                .set("ok", ok_fn)
-                .map_err(|e| eyre!("Failed to set ok global: {}", e))?;
-
-            let eval_fn: LuaFunction = lua
-                .load("return require('fennel').eval")
-                .eval()
-                .map_err(|e| eyre!("Failed to get fennel.eval: {}", e))?;
-
-            eval_fn
-                .call::<()>(code.as_str())
-                .map_err(|e| eyre!("Failed to execute fennel code: {}", e))?;
-
+        Commands::Check { code } => run_code(code, |status, assertion| {
+            match status {
+                Status::Ok => println!("ok: {}", assertion.display()),
+                Status::Missing => println!("missing: {}", assertion.display()),
+            }
             Ok(())
-        }
+        }),
+        Commands::Do { code } => run_code(code, |status, assertion| {
+            match status {
+                Status::Ok => println!("ok: {}", assertion.display()),
+                Status::Missing => {
+                    println!("missing: {}", assertion.display());
+                    assertion.install()?;
+                    println!("ok: {}", assertion.display());
+                }
+            }
+            Ok(())
+        }),
         Commands::Status { script } => run_script(script, |status, assertion| {
             match status {
                 Status::Ok => println!("ok: {}", assertion.display()),
