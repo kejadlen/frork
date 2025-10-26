@@ -469,6 +469,11 @@ impl Frork {
             .map_err(FrorkError::from)?;
         frork_table.set("ok", ok_fn).map_err(FrorkError::from)?;
 
+        let utils_table = Utils::lua_table(lua).map_err(FrorkError::from)?;
+        frork_table
+            .set("utils", utils_table)
+            .map_err(FrorkError::from)?;
+
         Ok(frork_table)
     }
 
@@ -516,6 +521,30 @@ impl Frork {
 
         handle_status(&status, assertion.as_ref()).map_err(LuaError::external)?;
         Ok(())
+    }
+}
+
+struct Utils;
+
+impl Utils {
+    fn lua_table(lua: &Lua) -> LuaResult<LuaTable> {
+        let utils_table = lua.create_table()?;
+
+        let dirname_fn = lua.create_function(|_lua, path: String| {
+            let expanded_path = expand_path(&path);
+            let Some(parent) = Path::new(&expanded_path).parent() else {
+                return Ok(None);
+            };
+
+            parent
+                .to_str()
+                .map(|s| Some(s.to_string()))
+                .ok_or_else(|| LuaError::RuntimeError("Path contains invalid UTF-8".to_string()))
+        })?;
+
+        utils_table.set("dirname", dirname_fn)?;
+
+        Ok(utils_table)
     }
 }
 
