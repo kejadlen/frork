@@ -23,6 +23,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    Check { code: String },
     Status { script: String },
     Satisfy { script: String },
 }
@@ -165,7 +166,7 @@ impl AssertionType for Symlink {
             if link_target == Path::new(&self.source) {
                 Ok(Status::Ok)
             } else {
-                unimplemented!(
+                todo!(
                     "{}",
                     format!(
                         "symlink {} {} points to wrong target",
@@ -174,7 +175,7 @@ impl AssertionType for Symlink {
                 );
             }
         } else {
-            unimplemented!(
+            todo!(
                 "{}",
                 format!(
                     "symlink {} {} target exists but is not a symlink",
@@ -361,10 +362,7 @@ impl Frork {
     }
 }
 
-fn run_script(
-    script: &str,
-    handle_status: impl Fn(&Status, &dyn AssertionType) -> Result<()> + Clone + 'static,
-) -> Result<()> {
+fn setup_fennel() -> Result<Lua> {
     let lua = Lua::new();
 
     let fennel_code = include_str!("../fennel-1.6.0.lua");
@@ -374,6 +372,15 @@ fn run_script(
         .map_err(|e| eyre!("Failed to load Fennel: {}", e))?;
     lua.register_module("fennel", fennel_module)
         .map_err(|e| eyre!("Failed to register Fennel module: {}", e))?;
+
+    Ok(lua)
+}
+
+fn run_script(
+    script: &str,
+    handle_status: impl Fn(&Status, &dyn AssertionType) -> Result<()> + Clone + 'static,
+) -> Result<()> {
+    let lua = setup_fennel()?;
 
     let frork_module =
         Frork::lua_table(&lua, handle_status).wrap_err("Failed to create Frork module")?;
@@ -392,6 +399,39 @@ fn run_script(
 
 fn run(command: &Commands) -> Result<()> {
     match command {
+        Commands::Check { code } => {
+            let lua = setup_fennel()?;
+
+            let handle_status = |status: &Status, assertion: &dyn AssertionType| {
+                match status {
+                    Status::Ok => println!("ok: {}", assertion.display()),
+                    Status::Missing => println!("missing: {}", assertion.display()),
+                }
+                Ok(())
+            };
+
+            let frork = Rc::new(Frork::default());
+            let frork_clone = frork.clone();
+            let ok_fn = lua
+                .create_function(move |_lua, args: LuaMultiValue| {
+                    frork_clone.ok(args, handle_status)
+                })
+                .map_err(|e| eyre!("Failed to create ok function: {}", e))?;
+            lua.globals()
+                .set("ok", ok_fn)
+                .map_err(|e| eyre!("Failed to set ok global: {}", e))?;
+
+            let eval_fn: LuaFunction = lua
+                .load("return require('fennel').eval")
+                .eval()
+                .map_err(|e| eyre!("Failed to get fennel.eval: {}", e))?;
+
+            eval_fn
+                .call::<()>(code.as_str())
+                .map_err(|e| eyre!("Failed to execute fennel code: {}", e))?;
+
+            Ok(())
+        }
         Commands::Status { script } => run_script(script, |status, assertion| {
             match status {
                 Status::Ok => println!("ok: {}", assertion.display()),
