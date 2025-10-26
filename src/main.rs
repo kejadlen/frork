@@ -202,7 +202,6 @@ impl AssertionType for Symlink {
 }
 
 struct Debug {
-    display_fn: Option<LuaFunction>,
     status_fn: Option<LuaFunction>,
     install_fn: Option<LuaFunction>,
 }
@@ -231,26 +230,17 @@ impl Debug {
 
         let status_fn: Option<LuaFunction> = table.get("status").ok();
         let install_fn: Option<LuaFunction> = table.get("install").ok();
-        let display_fn: Option<LuaFunction> = table.get("display").ok();
 
         Ok(Self {
             status_fn,
             install_fn,
-            display_fn,
         })
     }
 }
 
 impl std::fmt::Display for Debug {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(ref display_fn) = self.display_fn {
-            let result = display_fn
-                .call::<String>(LuaMultiValue::new())
-                .unwrap_or_else(|_| "debug".to_string());
-            write!(f, "{}", result)
-        } else {
-            write!(f, "debug")
-        }
+        write!(f, "debug")
     }
 }
 
@@ -271,7 +261,7 @@ impl AssertionType for Debug {
     }
 
     fn install(&self) -> Result<()> {
-        info!("debug: installing {}", self);
+        info!("debug: installing");
         let install_fn = self
             .install_fn
             .as_ref()
