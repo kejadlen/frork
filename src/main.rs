@@ -94,6 +94,11 @@ impl Default for Registry {
         let mut registry = Self {
             assertion_types: HashMap::new(),
         };
+
+        registry.register("debug", |args| {
+            Debug::new(args).map(|d| Box::new(d) as Box<dyn AssertionType>)
+        });
+
         registry.register("symlink", |args| {
             Symlink::new(args).map(|s| Box::new(s) as Box<dyn AssertionType>)
         });
@@ -190,6 +195,83 @@ impl AssertionType for Symlink {
         fs::symlink(&self.source, &self.target)
             .map_err(|e| eyre!("Failed to create symlink: {}", e))?;
         debug!("created: {}", self.display());
+        Ok(())
+    }
+}
+
+struct Debug {
+    display_fn: Option<LuaFunction>,
+    status_fn: Option<LuaFunction>,
+    install_fn: Option<LuaFunction>,
+}
+
+impl Debug {
+    fn new(args: LuaMultiValue) -> Result<Self> {
+        let args_vec: Vec<LuaValue> = args.into_vec();
+
+        if args_vec.len() != 1 {
+            return Err(FrorkError::InvalidArguments(format!(
+                "Debug requires exactly 1 argument, got {}",
+                args_vec.len()
+            ))
+            .into());
+        }
+
+        let table = match &args_vec[0] {
+            LuaValue::Table(t) => t.clone(),
+            _ => {
+                return Err(FrorkError::InvalidArguments(
+                    "Debug argument must be a table".to_string(),
+                )
+                .into());
+            }
+        };
+
+        let status_fn: Option<LuaFunction> = table.get("status").ok();
+        let install_fn: Option<LuaFunction> = table.get("install").ok();
+        let display_fn: Option<LuaFunction> = table.get("display").ok();
+
+        Ok(Self {
+            status_fn,
+            install_fn,
+            display_fn,
+        })
+    }
+}
+
+impl AssertionType for Debug {
+    fn display(&self) -> String {
+        if let Some(ref display_fn) = self.display_fn {
+            display_fn
+                .call::<String>(LuaMultiValue::new())
+                .unwrap_or_else(|_| "debug".to_string())
+        } else {
+            "debug".to_string()
+        }
+    }
+
+    fn status(&self) -> Result<Status> {
+        if let Some(ref status_fn) = self.status_fn {
+            let result = status_fn
+                .call::<String>(LuaMultiValue::new())
+                .map_err(|e| eyre!("Debug status function failed: {}", e))?;
+            match result.as_str() {
+                "ok" => Ok(Status::Ok),
+                "missing" => Ok(Status::Missing),
+                _ => Err(eyre!("Invalid status returned: '{}'", result)),
+            }
+        } else {
+            Ok(Status::Ok)
+        }
+    }
+
+    fn install(&self) -> Result<()> {
+        info!("debug: installing {}", self.display());
+        if let Some(ref install_fn) = self.install_fn {
+            install_fn
+                .call::<()>(LuaMultiValue::new())
+                .map_err(|e| eyre!("Debug install function failed: {}", e))?;
+        }
         Ok(())
     }
 }
