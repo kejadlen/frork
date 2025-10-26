@@ -570,7 +570,7 @@ fn run_script(
 
     let frork_module =
         Frork::lua_table(&lua, handle_status).wrap_err("Failed to create Frork module")?;
-    lua.register_module("frork", frork_module)
+    lua.register_module("frork", &frork_module)
         .map_err(|e| eyre!("Failed to register Frork module: {}", e))?;
 
     lua.load(format!(
