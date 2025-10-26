@@ -428,50 +428,59 @@ impl LuaAssertion {
     }
 }
 
-struct Frork {
+struct Frork<F> {
     // RefCell needed for interior mutability - register() method needs to add
     // new assertion types at runtime when called from Lua/Fennel code
     registry: RefCell<Registry>,
+    handle_status: F,
 }
 
-impl Default for Frork {
-    fn default() -> Self {
+impl<F> Frork<F> {
+    fn new(handle_status: F) -> Self {
         Self {
             registry: RefCell::new(Registry::default()),
+            handle_status,
         }
     }
 }
 
-impl Frork {
-    fn lua_table<F>(lua: &Lua, handle_status: F) -> Result<LuaTable>
-    where
-        F: Fn(&Status, &dyn AssertionType) -> Result<()> + Clone + 'static,
-    {
-        let frork_table = lua.create_table().map_err(FrorkError::from)?;
-        let frork = Rc::new(Self::default());
+impl<F> IntoLua for Frork<F>
+where
+    F: Fn(&Status, &dyn AssertionType) -> Result<()> + Clone + 'static,
+{
+    fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
+        let frork_table = lua.create_table()?;
+        let frork = Rc::new(self);
 
         let frork_clone = frork.clone();
-        let register_fn = lua
-            .create_function(move |_lua, (name, table): (String, LuaTable)| {
-                frork_clone.register(&name, table)
-            })
-            .map_err(FrorkError::from)?;
+        let register_fn = lua.create_function(move |_lua, (name, table): (String, LuaTable)| {
+            frork_clone.register(&name, table)
+        })?;
 
-        frork_table
-            .set("register", register_fn)
-            .map_err(FrorkError::from)?;
+        frork_table.set("register", register_fn)?;
 
         let frork_clone = frork.clone();
-        let ok_fn = lua
-            .create_function(move |_lua, args: LuaMultiValue| {
-                frork_clone.ok(args, handle_status.clone())
-            })
-            .map_err(FrorkError::from)?;
-        frork_table.set("ok", ok_fn).map_err(FrorkError::from)?;
+        let ok_fn = lua.create_function(move |_lua, args: LuaMultiValue| frork_clone.ok(args))?;
+        frork_table.set("ok", ok_fn)?;
 
-        frork_table.set("utils", Utils {}).map_err(FrorkError::from)?;
+        frork_table.set("utils", Utils {})?;
 
-        Ok(frork_table)
+        Ok(LuaValue::Table(frork_table))
+    }
+}
+
+impl<F> Frork<F>
+where
+    F: Fn(&Status, &dyn AssertionType) -> Result<()> + Clone + 'static,
+{
+    fn lua_table(lua: &Lua, handle_status: F) -> Result<LuaTable> {
+        match Self::new(handle_status)
+            .into_lua(lua)
+            .map_err(FrorkError::from)?
+        {
+            LuaValue::Table(table) => Ok(table),
+            _ => unreachable!(),
+        }
     }
 
     fn register(&self, name: &str, table: LuaTable) -> LuaResult<()> {
@@ -493,10 +502,7 @@ impl Frork {
         Ok(())
     }
 
-    fn ok<F>(&self, args: LuaMultiValue, handle_status: F) -> LuaResult<()>
-    where
-        F: Fn(&Status, &dyn AssertionType) -> Result<()>,
-    {
+    fn ok(&self, args: LuaMultiValue) -> LuaResult<()> {
         if args.is_empty() {
             return Err(LuaError::external(FrorkError::NoOperation));
         }
@@ -516,7 +522,7 @@ impl Frork {
             .map_err(LuaError::external)?;
         let status = assertion.status().map_err(LuaError::external)?;
 
-        handle_status(&status, assertion.as_ref()).map_err(LuaError::external)?;
+        (self.handle_status)(&status, assertion.as_ref()).map_err(LuaError::external)?;
         Ok(())
     }
 }
@@ -565,12 +571,10 @@ fn run_code(
 ) -> Result<()> {
     let lua = setup_fennel()?;
 
-    let frork = Rc::new(Frork::default());
+    let frork = Rc::new(Frork::new(handle_status.clone()));
     let frork_clone = frork.clone();
     let ok_fn = lua
-        .create_function(move |_lua, args: LuaMultiValue| {
-            frork_clone.ok(args, handle_status.clone())
-        })
+        .create_function(move |_lua, args: LuaMultiValue| frork_clone.ok(args))
         .map_err(|e| eyre!("Failed to create ok function: {}", e))?;
     lua.globals()
         .set("ok", ok_fn)
@@ -792,7 +796,7 @@ mod tests {
             )
             .unwrap();
 
-        let frork = Frork::default();
+        let frork = Frork::new(|_status, _assertion| Ok(()));
         frork.register("test-assertion", assertion_table).unwrap();
     }
 }
