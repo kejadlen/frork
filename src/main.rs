@@ -1,8 +1,5 @@
 use clap::{Parser, Subcommand};
-use color_eyre::{
-    Result,
-    eyre::{WrapErr, eyre},
-};
+use color_eyre::{Result, eyre::eyre};
 use mlua::prelude::*;
 use regex::Regex;
 use std::cell::RefCell;
@@ -444,16 +441,6 @@ impl<F> Frork<F>
 where
     F: Fn(&Status, &dyn AssertionType) -> Result<()> + Clone + 'static,
 {
-    fn lua_table(lua: &Lua, handle_status: F) -> Result<LuaTable> {
-        match Self::new(handle_status)
-            .into_lua(lua)
-            .map_err(FrorkError::from)?
-        {
-            LuaValue::Table(table) => Ok(table),
-            _ => unreachable!(),
-        }
-    }
-
     fn register(&self, name: &str, table: LuaTable) -> LuaResult<()> {
         let display_fn: Option<LuaFunction> = table.get("display").ok();
         let status_fn: LuaFunction = table.get("status")?;
@@ -541,38 +528,47 @@ impl IntoLua for Utils {
     }
 }
 
-fn setup_fennel() -> Result<Lua> {
+fn setup_lua(
+    handle_status: impl Fn(&Status, &dyn AssertionType) -> Result<()> + Clone + 'static,
+) -> Result<(Lua, LuaTable, LuaTable)> {
     let lua = Lua::new();
 
     let fennel_code = include_str!("../fennel-1.6.0.lua");
-    let fennel_module = lua
+    let fennel_module: LuaTable = lua
         .load(fennel_code)
-        .eval::<LuaValue>()
+        .eval()
         .map_err(|e| eyre!("Failed to load Fennel: {}", e))?;
-    lua.register_module("fennel", fennel_module)
+    lua.register_module("fennel", &fennel_module)
         .map_err(|e| eyre!("Failed to register Fennel module: {}", e))?;
 
-    Ok(lua)
+    let frork_table = match Frork::new(handle_status)
+        .into_lua(&lua)
+        .map_err(|e| eyre!("Failed to create Frork table: {}", e))?
+    {
+        LuaValue::Table(table) => table,
+        _ => unreachable!(),
+    };
+    lua.register_module("frork", &frork_table)
+        .map_err(|e| eyre!("Failed to register Frork module: {}", e))?;
+
+    Ok((lua, frork_table, fennel_module))
 }
 
 fn run_code(
     code: &str,
     handle_status: impl Fn(&Status, &dyn AssertionType) -> Result<()> + Clone + 'static,
 ) -> Result<()> {
-    let lua = setup_fennel()?;
+    let (lua, frork_module, fennel_module) = setup_lua(handle_status)?;
 
-    let frork = Rc::new(Frork::new(handle_status.clone()));
-    let frork_clone = frork.clone();
-    let ok_fn = lua
-        .create_function(move |_lua, args: LuaMultiValue| frork_clone.ok(args))
-        .map_err(|e| eyre!("Failed to create ok function: {}", e))?;
+    let ok_fn: LuaFunction = frork_module
+        .get("ok")
+        .map_err(|e| eyre!("Failed to get frork.ok: {}", e))?;
     lua.globals()
         .set("ok", ok_fn)
         .map_err(|e| eyre!("Failed to set ok global: {}", e))?;
 
-    let eval_fn: LuaFunction = lua
-        .load("return require('fennel').eval")
-        .eval()
+    let eval_fn: LuaFunction = fennel_module
+        .get("eval")
         .map_err(|e| eyre!("Failed to get fennel.eval: {}", e))?;
 
     eval_fn
@@ -586,12 +582,7 @@ fn run_script(
     script: &str,
     handle_status: impl Fn(&Status, &dyn AssertionType) -> Result<()> + Clone + 'static,
 ) -> Result<()> {
-    let lua = setup_fennel()?;
-
-    let frork_module =
-        Frork::lua_table(&lua, handle_status).wrap_err("Failed to create Frork module")?;
-    lua.register_module("frork", &frork_module)
-        .map_err(|e| eyre!("Failed to register Frork module: {}", e))?;
+    let (lua, _frork_module, _fennel_module) = setup_lua(handle_status)?;
 
     lua.load(format!(
         r#"require("fennel").install().dofile("{}")"#,
