@@ -100,6 +100,7 @@ impl IntoLua for Utils {
             "chomp",
             lua.create_function(|_lua, s: String| Ok(Utils::chomp(&s)))?,
         )?;
+
         utils_table.set(
             "sh",
             lua.create_function(|_lua, args: LuaVariadic<String>| {
@@ -111,10 +112,25 @@ impl IntoLua for Utils {
                 })?;
                 let cmd_args: Vec<String> = args_iter.collect();
 
-                let result = Utils::sh(&cmd, &cmd_args)
+                Ok(Utils::sh(&cmd, &cmd_args)
                     .map(|(stdout, status)| (Some(stdout), status))
-                    .unwrap_or((None, -1));
-                Ok(result)
+                    .unwrap_or((None, -1)))
+            })?,
+        )?;
+        utils_table.set(
+            "sh!",
+            lua.create_function(|_lua, args: LuaVariadic<String>| {
+                let mut args_iter = args.into_iter();
+                let cmd = args_iter.next().ok_or_else(|| {
+                    LuaError::external(FrorkError::InvalidArguments(
+                        "sh requires at least a command".to_string(),
+                    ))
+                })?;
+                let cmd_args: Vec<String> = args_iter.collect();
+
+                Utils::sh(&cmd, &cmd_args)
+                    .map(|(stdout, status)| (Some(stdout), status))
+                    .map_err(LuaError::external)
             })?,
         )?;
 
@@ -221,6 +237,14 @@ mod tests {
         let result: (Option<String>, i32) = lua.load(r#"return utils.sh("false")"#).eval().unwrap();
 
         assert_eq!(result.1, 1);
+
+        // Test sh! with non-zero exit
+        let result: (Option<String>, i32) = lua
+            .load(r#"return utils["sh!"]("sh", "-c", "exit 42")"#)
+            .eval()
+            .unwrap();
+
+        assert_eq!(result.1, 42);
     }
 
     #[test]
