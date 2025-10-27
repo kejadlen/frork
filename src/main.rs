@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use color_eyre::{Result, eyre::eyre};
 use mlua::prelude::*;
 use regex::Regex;
+use serde::Deserialize;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::env;
@@ -61,7 +62,7 @@ impl From<LuaError> for FrorkError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize)]
 struct Conflict {
     expected: String,
     actual: String,
@@ -69,10 +70,7 @@ struct Conflict {
 
 impl FromLua for Conflict {
     fn from_lua(value: LuaValue, lua: &Lua) -> LuaResult<Self> {
-        let table = LuaTable::from_lua(value, lua)?;
-        let expected: String = table.get("expected")?;
-        let actual: String = table.get("actual")?;
-        Ok(Conflict { expected, actual })
+        lua.from_value(value)
     }
 }
 

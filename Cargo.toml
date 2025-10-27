@@ -6,9 +6,9 @@ edition = "2024"
 [dependencies]
 color-eyre = "*"
 clap = { version = "*", features = ["derive"] }
-facet = "*"
-mlua = { version = "*", features = ["lua54", "vendored"] }
+mlua = { version = "*", features = ["lua54", "serde", "vendored"] }
 regex = "*"
+serde = { version = "*", features = ["derive"] }
 thiserror = "*"
 tracing = "*"
 tracing-subscriber = "*"
