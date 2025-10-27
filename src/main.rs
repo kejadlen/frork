@@ -65,6 +65,7 @@ impl From<LuaError> for FrorkError {
 enum Status {
     Ok,
     Missing,
+    ConflictUpgrade,
 }
 
 trait AssertionType: std::fmt::Display {
@@ -285,6 +286,7 @@ impl AssertionType for Debug {
             match result.as_str() {
                 "ok" => Ok(Status::Ok),
                 "missing" => Ok(Status::Missing),
+                "conflict-upgrade" => Ok(Status::ConflictUpgrade),
                 _ => Err(eyre!("Invalid status returned: '{}'", result)),
             }
         } else {
@@ -366,6 +368,7 @@ impl AssertionType for LuaAssertion {
         match result.as_str() {
             "ok" => Ok(Status::Ok),
             "missing" => Ok(Status::Missing),
+            "conflict-upgrade" => Ok(Status::ConflictUpgrade),
             _ => Err(eyre!("Invalid status returned: '{}'", result)),
         }
     }
@@ -632,6 +635,7 @@ fn status(status: &Status, assertion: &dyn AssertionType) -> Result<()> {
     match status {
         Status::Ok => println!("ok: {}", assertion),
         Status::Missing => println!("missing: {}", assertion),
+        Status::ConflictUpgrade => println!("conflict (upgradable): {}", assertion),
     }
     Ok(())
 }
@@ -643,6 +647,9 @@ fn satisfy(status: &Status, assertion: &dyn AssertionType) -> Result<()> {
             println!("missing: {}", assertion);
             assertion.install()?;
             println!("ok: {}", assertion);
+        }
+        Status::ConflictUpgrade => {
+            todo!("Handle conflict upgrade status in satisfy");
         }
     }
     Ok(())
