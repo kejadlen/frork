@@ -171,8 +171,8 @@ impl FromLuaMulti for Symlink {
     fn from_lua_multi(args: LuaMultiValue, lua: &Lua) -> LuaResult<Self> {
         let (target, source) = <(String, String)>::from_lua_multi(args, lua)?;
         Ok(Self {
-            target: Utils::expand_path(&target),
-            source: Utils::expand_path(&source),
+            target: Utils::expand_path(&target).map_err(LuaError::external)?,
+            source: Utils::expand_path(&source).map_err(LuaError::external)?,
         })
     }
 }
@@ -229,7 +229,7 @@ impl FromLuaMulti for Directory {
     fn from_lua_multi(args: LuaMultiValue, lua: &Lua) -> LuaResult<Self> {
         let path = String::from_lua_multi(args, lua)?;
         Ok(Self {
-            path: Utils::expand_path(&path),
+            path: Utils::expand_path(&path).map_err(LuaError::external)?,
         })
     }
 }
