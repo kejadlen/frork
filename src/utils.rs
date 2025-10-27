@@ -102,21 +102,16 @@ impl IntoLua for Utils {
         )?;
         utils_table.set(
             "sh",
-            lua.create_function(|lua, args: LuaMultiValue| {
-                let all_args: Vec<String> = args
-                    .into_iter()
-                    .map(|arg| String::from_lua(arg, lua))
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                if all_args.is_empty() {
-                    return Err(LuaError::external(FrorkError::InvalidArguments(
+            lua.create_function(|_lua, args: LuaVariadic<String>| {
+                let mut args_iter = args.into_iter();
+                let cmd = args_iter.next().ok_or_else(|| {
+                    LuaError::external(FrorkError::InvalidArguments(
                         "sh requires at least a command".to_string(),
-                    )));
-                }
+                    ))
+                })?;
+                let cmd_args: Vec<String> = args_iter.collect();
 
-                let (cmd, cmd_args) = all_args.split_first().unwrap();
-
-                let result = Utils::sh(cmd, cmd_args)
+                let result = Utils::sh(&cmd, &cmd_args)
                     .map(|(stdout, status)| (Some(stdout), status))
                     .unwrap_or((None, -1));
                 Ok(result)
