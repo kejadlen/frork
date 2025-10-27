@@ -62,10 +62,65 @@ impl From<LuaError> for FrorkError {
 }
 
 #[derive(Debug)]
+struct Conflict {
+    expected: String,
+    actual: String,
+}
+
+impl FromLua for Conflict {
+    fn from_lua(value: LuaValue, lua: &Lua) -> LuaResult<Self> {
+        let table = LuaTable::from_lua(value, lua)?;
+        let expected: String = table.get("expected")?;
+        let actual: String = table.get("actual")?;
+        Ok(Conflict { expected, actual })
+    }
+}
+
+#[derive(Debug)]
 enum Status {
     Ok,
     Missing,
-    ConflictUpgrade,
+    ConflictUpgrade(Conflict),
+}
+
+impl FromLuaMulti for Status {
+    fn from_lua_multi(values: LuaMultiValue, lua: &Lua) -> LuaResult<Self> {
+        // Try two values: string and conflict for conflict-upgrade
+        if let Ok((status_str, conflict)) =
+            <(String, Conflict)>::from_lua_multi(values.clone(), lua)
+        {
+            return match status_str.as_str() {
+                "conflict-upgrade" => Ok(Status::ConflictUpgrade(conflict)),
+                _ => Err(LuaError::FromLuaConversionError {
+                    from: "multivalue",
+                    to: "Status".to_string(),
+                    message: Some(
+                        "String + conflict combination only supported for conflict-upgrade"
+                            .to_string(),
+                    ),
+                }),
+            };
+        }
+
+        // Try single string
+        if let Ok(status_str) = String::from_lua_multi(values, lua) {
+            return match status_str.as_str() {
+                "ok" => Ok(Status::Ok),
+                "missing" => Ok(Status::Missing),
+                _ => Err(LuaError::FromLuaConversionError {
+                    from: "string",
+                    to: "Status".to_string(),
+                    message: Some(format!("Invalid status string: '{}'", status_str)),
+                }),
+            };
+        }
+
+        Err(LuaError::FromLuaConversionError {
+            from: "multivalue",
+            to: "Status".to_string(),
+            message: Some("Expected single string or conflict-upgrade with table".to_string()),
+        })
+    }
 }
 
 trait AssertionType: std::fmt::Display {
@@ -80,17 +135,8 @@ struct LuaAssertionType {
 }
 
 impl FromLua for LuaAssertionType {
-    fn from_lua(value: LuaValue, _lua: &Lua) -> LuaResult<Self> {
-        let table = match value {
-            LuaValue::Table(table) => table,
-            _ => {
-                return Err(LuaError::FromLuaConversionError {
-                    from: value.type_name(),
-                    to: "LuaAssertionType".to_string(),
-                    message: Some("Expected a table".to_string()),
-                });
-            }
-        };
+    fn from_lua(value: LuaValue, lua: &Lua) -> LuaResult<Self> {
+        let table = LuaTable::from_lua(value, lua)?;
 
         let display_fn: Option<LuaFunction> = table.get("display").ok();
         let status_fn: LuaFunction = table.get("status")?;
@@ -129,9 +175,15 @@ impl Registry {
 
         // Fall back to built-in types
         match assertion_type {
-            "debug" => Debug::new(args).map(|d| Box::new(d) as Box<dyn AssertionType>),
-            "directory" => Directory::new(args).map(|d| Box::new(d) as Box<dyn AssertionType>),
-            "symlink" => Symlink::new(args).map(|s| Box::new(s) as Box<dyn AssertionType>),
+            "debug" => Debug::from_lua_multi(args, &Lua::new())
+                .map(|d| Box::new(d) as Box<dyn AssertionType>)
+                .map_err(|e| FrorkError::from(e).into()),
+            "directory" => Directory::from_lua_multi(args, &Lua::new())
+                .map(|d| Box::new(d) as Box<dyn AssertionType>)
+                .map_err(|e| FrorkError::from(e).into()),
+            "symlink" => Symlink::from_lua_multi(args, &Lua::new())
+                .map(|s| Box::new(s) as Box<dyn AssertionType>)
+                .map_err(|e| FrorkError::from(e).into()),
             _ => Err(FrorkError::UnknownAssertionType {
                 assertion_type: assertion_type.to_string(),
             }
@@ -145,15 +197,9 @@ struct Symlink {
     source: String,
 }
 
-impl Symlink {
-    fn new(args: LuaMultiValue) -> Result<Self> {
-        let (target, source) =
-            <(String, String)>::from_lua_multi(args, &Lua::new()).map_err(|_| {
-                FrorkError::InvalidArguments(
-                    "Symlink requires exactly 2 string arguments".to_string(),
-                )
-            })?;
-
+impl FromLuaMulti for Symlink {
+    fn from_lua_multi(args: LuaMultiValue, lua: &Lua) -> LuaResult<Self> {
+        let (target, source) = <(String, String)>::from_lua_multi(args, lua)?;
         Ok(Self {
             target: Utils::expand_path(&target),
             source: Utils::expand_path(&source),
@@ -209,12 +255,9 @@ struct Directory {
     path: String,
 }
 
-impl Directory {
-    fn new(args: LuaMultiValue) -> Result<Self> {
-        let path = String::from_lua_multi(args, &Lua::new()).map_err(|_| {
-            FrorkError::InvalidArguments("Directory requires exactly 1 string argument".to_string())
-        })?;
-
+impl FromLuaMulti for Directory {
+    fn from_lua_multi(args: LuaMultiValue, lua: &Lua) -> LuaResult<Self> {
+        let path = String::from_lua_multi(args, lua)?;
         Ok(Self {
             path: Utils::expand_path(&path),
         })
@@ -255,15 +298,11 @@ struct Debug {
     install_fn: Option<LuaFunction>,
 }
 
-impl Debug {
-    fn new(args: LuaMultiValue) -> Result<Self> {
-        let table = LuaTable::from_lua_multi(args, &Lua::new()).map_err(|_| {
-            FrorkError::InvalidArguments("Debug requires exactly 1 table argument".to_string())
-        })?;
-
+impl FromLuaMulti for Debug {
+    fn from_lua_multi(args: LuaMultiValue, lua: &Lua) -> LuaResult<Self> {
+        let table = LuaTable::from_lua_multi(args, lua)?;
         let status_fn: Option<LuaFunction> = table.get("status").ok();
         let install_fn: Option<LuaFunction> = table.get("install").ok();
-
         Ok(Self {
             status_fn,
             install_fn,
@@ -281,14 +320,9 @@ impl AssertionType for Debug {
     fn status(&self) -> Result<Status> {
         if let Some(ref status_fn) = self.status_fn {
             let result = status_fn
-                .call::<String>(LuaMultiValue::new())
+                .call::<Status>(LuaMultiValue::new())
                 .map_err(|e| eyre!("Debug status function failed: {}", e))?;
-            match result.as_str() {
-                "ok" => Ok(Status::Ok),
-                "missing" => Ok(Status::Missing),
-                "conflict-upgrade" => Ok(Status::ConflictUpgrade),
-                _ => Err(eyre!("Invalid status returned: '{}'", result)),
-            }
+            Ok(result)
         } else {
             Ok(Status::Ok)
         }
@@ -363,14 +397,9 @@ impl AssertionType for LuaAssertion {
     fn status(&self) -> Result<Status> {
         let result = self
             .status_fn
-            .call::<String>(self.args.clone())
+            .call::<Status>(self.args.clone())
             .map_err(FrorkError::from)?;
-        match result.as_str() {
-            "ok" => Ok(Status::Ok),
-            "missing" => Ok(Status::Missing),
-            "conflict-upgrade" => Ok(Status::ConflictUpgrade),
-            _ => Err(eyre!("Invalid status returned: '{}'", result)),
-        }
+        Ok(result)
     }
 
     fn install(&self) -> Result<()> {
@@ -635,7 +664,11 @@ fn status(status: &Status, assertion: &dyn AssertionType) -> Result<()> {
     match status {
         Status::Ok => println!("ok: {}", assertion),
         Status::Missing => println!("missing: {}", assertion),
-        Status::ConflictUpgrade => println!("conflict (upgradable): {}", assertion),
+        Status::ConflictUpgrade(conflict) => {
+            println!("conflict (upgradable): {}", assertion);
+            println!("  expected: {}", conflict.expected);
+            println!("    actual: {}", conflict.actual);
+        }
     }
     Ok(())
 }
@@ -648,8 +681,12 @@ fn satisfy(status: &Status, assertion: &dyn AssertionType) -> Result<()> {
             assertion.install()?;
             println!("ok: {}", assertion);
         }
-        Status::ConflictUpgrade => {
-            todo!("Handle conflict upgrade status in satisfy");
+        Status::ConflictUpgrade(conflict) => {
+            todo!(
+                "Handle conflict upgrade status in satisfy: expected: {}, actual: {}",
+                conflict.expected,
+                conflict.actual
+            );
         }
     }
     Ok(())
