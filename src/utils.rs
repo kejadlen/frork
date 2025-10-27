@@ -9,6 +9,58 @@ use tracing::debug;
 
 use crate::errors::FrorkError;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpandedPath(String);
+
+impl ExpandedPath {
+    pub fn new(path: &str) -> Result<Self> {
+        Ok(Self(Utils::expand_path(path)?))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl From<ExpandedPath> for String {
+    fn from(path: ExpandedPath) -> Self {
+        path.0
+    }
+}
+
+impl TryFrom<String> for ExpandedPath {
+    type Error = color_eyre::eyre::Error;
+
+    fn try_from(path: String) -> Result<Self> {
+        Self::new(&path)
+    }
+}
+
+impl TryFrom<&str> for ExpandedPath {
+    type Error = color_eyre::eyre::Error;
+
+    fn try_from(path: &str) -> Result<Self> {
+        Self::new(path)
+    }
+}
+
+impl FromLua for ExpandedPath {
+    fn from_lua(value: LuaValue, lua: &Lua) -> LuaResult<Self> {
+        let path_str = String::from_lua(value, lua)?;
+        Self::new(&path_str).map_err(LuaError::external)
+    }
+}
+
+impl std::fmt::Display for ExpandedPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 pub struct Utils;
 
 impl Utils {

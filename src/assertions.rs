@@ -6,7 +6,7 @@ use std::path::Path;
 use tracing::{debug, error, info};
 
 use crate::errors::FrorkError;
-use crate::utils::Utils;
+use crate::utils::ExpandedPath;
 
 pub trait AssertionTypeFactory {
     fn create(&self, lua: &Lua, args: LuaMultiValue) -> Result<Box<dyn AssertionType>>;
@@ -125,17 +125,14 @@ impl FromLua for LuaAssertionType {
 }
 
 pub struct Symlink {
-    pub target: String,
-    pub source: String,
+    pub target: ExpandedPath,
+    pub source: ExpandedPath,
 }
 
 impl FromLuaMulti for Symlink {
     fn from_lua_multi(args: LuaMultiValue, lua: &Lua) -> LuaResult<Self> {
-        let (target, source) = <(String, String)>::from_lua_multi(args, lua)?;
-        Ok(Self {
-            target: Utils::expand_path(&target).map_err(LuaError::external)?,
-            source: Utils::expand_path(&source).map_err(LuaError::external)?,
-        })
+        let (target, source) = <(ExpandedPath, ExpandedPath)>::from_lua_multi(args, lua)?;
+        Ok(Self { target, source })
     }
 }
 
@@ -147,12 +144,12 @@ impl std::fmt::Display for Symlink {
 
 impl AssertionType for Symlink {
     fn status(&self) -> Result<Status> {
-        if !Path::new(&self.target).exists() {
+        if !Path::new(self.target.as_str()).exists() {
             return Ok(Status::Missing);
         }
 
-        if let Ok(link_target) = fs::read_link(&self.target) {
-            if link_target == Path::new(&self.source) {
+        if let Ok(link_target) = fs::read_link(self.target.as_str()) {
+            if link_target == Path::new(self.source.as_str()) {
                 Ok(Status::Ok)
             } else {
                 todo!(
@@ -176,7 +173,7 @@ impl AssertionType for Symlink {
 
     fn install(&self) -> Result<()> {
         use std::os::unix::fs;
-        fs::symlink(&self.source, &self.target)
+        fs::symlink(self.source.as_str(), self.target.as_str())
             .map_err(|e| eyre!("Failed to create symlink: {}", e))?;
         debug!("created: {}", self);
         Ok(())
@@ -184,15 +181,13 @@ impl AssertionType for Symlink {
 }
 
 pub struct Directory {
-    pub path: String,
+    pub path: ExpandedPath,
 }
 
 impl FromLuaMulti for Directory {
     fn from_lua_multi(args: LuaMultiValue, lua: &Lua) -> LuaResult<Self> {
-        let path = String::from_lua_multi(args, lua)?;
-        Ok(Self {
-            path: Utils::expand_path(&path).map_err(LuaError::external)?,
-        })
+        let path = ExpandedPath::from_lua_multi(args, lua)?;
+        Ok(Self { path })
     }
 }
 
@@ -204,7 +199,7 @@ impl std::fmt::Display for Directory {
 
 impl AssertionType for Directory {
     fn status(&self) -> Result<Status> {
-        let path = Path::new(&self.path);
+        let path = Path::new(self.path.as_str());
         if path.is_dir() {
             Ok(Status::Ok)
         } else if path.exists() {
@@ -218,7 +213,7 @@ impl AssertionType for Directory {
     }
 
     fn install(&self) -> Result<()> {
-        std::fs::create_dir_all(&self.path)
+        std::fs::create_dir_all(self.path.as_str())
             .map_err(|e| eyre!("Failed to create directory: {}", e))?;
         debug!("created: {}", self);
         Ok(())
