@@ -128,6 +128,7 @@ trait AssertionType: std::fmt::Display {
     fn install(&self) -> Result<()>;
 }
 
+#[derive(Clone)]
 struct LuaAssertionType {
     display_fn: Option<LuaFunction>,
     status_fn: LuaFunction,
@@ -167,9 +168,7 @@ impl Registry {
             return Ok(Box::new(LuaAssertion::new(
                 assertion_type,
                 args,
-                lua_assertion.display_fn.clone(),
-                lua_assertion.status_fn.clone(),
-                lua_assertion.install_fn.clone(),
+                lua_assertion.clone(),
             )));
         }
 
@@ -344,25 +343,15 @@ impl AssertionType for Debug {
 struct LuaAssertion {
     name: String,
     args: LuaMultiValue,
-    display_fn: Option<LuaFunction>,
-    status_fn: LuaFunction,
-    install_fn: LuaFunction,
+    assertion_type: LuaAssertionType,
 }
 
 impl LuaAssertion {
-    fn new(
-        name: &str,
-        args: LuaMultiValue,
-        display_fn: Option<LuaFunction>,
-        status_fn: LuaFunction,
-        install_fn: LuaFunction,
-    ) -> Self {
+    fn new(name: &str, args: LuaMultiValue, assertion_type: LuaAssertionType) -> Self {
         Self {
             name: name.to_string(),
             args,
-            display_fn,
-            status_fn,
-            install_fn,
+            assertion_type,
         }
     }
 }
@@ -379,7 +368,7 @@ impl std::fmt::Display for LuaAssertion {
             format!("{} {}", self.name, args_str)
         };
 
-        if let Some(ref display_fn) = self.display_fn {
+        if let Some(ref display_fn) = self.assertion_type.display_fn {
             let result = display_fn
                 .call::<String>(self.args.clone())
                 .unwrap_or_else(|err| {
@@ -396,6 +385,7 @@ impl std::fmt::Display for LuaAssertion {
 impl AssertionType for LuaAssertion {
     fn status(&self) -> Result<Status> {
         let result = self
+            .assertion_type
             .status_fn
             .call::<Status>(self.args.clone())
             .map_err(FrorkError::from)?;
@@ -403,7 +393,8 @@ impl AssertionType for LuaAssertion {
     }
 
     fn install(&self) -> Result<()> {
-        self.install_fn
+        self.assertion_type
+            .install_fn
             .call::<()>(self.args.clone())
             .map_err(FrorkError::from)?;
         debug!("installed: {}", self);
