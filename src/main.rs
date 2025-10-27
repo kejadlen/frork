@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 use std::rc::Rc;
 use std::sync::LazyLock;
 use thiserror::Error;
@@ -440,6 +441,16 @@ where
 struct Utils;
 
 impl Utils {
+    fn chomp(s: &str) -> String {
+        s.trim_end_matches('\n').trim_end_matches('\r').to_string()
+    }
+
+    fn dirname(path: &str) -> Option<String> {
+        let expanded_path = Self::expand_path(path);
+        let parent = Path::new(&expanded_path).parent()?;
+        parent.to_str().map(|s| s.to_string())
+    }
+
     fn expand_path(path: &str) -> String {
         static ENV_VAR_REGEX: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(r"\$([A-Za-z_][A-Za-z0-9_]*)").unwrap());
@@ -464,10 +475,24 @@ impl Utils {
         expanded
     }
 
-    fn dirname(path: &str) -> Option<String> {
-        let expanded_path = Self::expand_path(path);
-        let parent = Path::new(&expanded_path).parent()?;
-        parent.to_str().map(|s| s.to_string())
+    fn sh(cmd: &str, args: &[String]) -> Result<(String, i32)> {
+        debug!("Executing command: {} with args: {:?}", cmd, args);
+
+        let output = Command::new(cmd)
+            .args(args)
+            .output()
+            .map_err(|e| eyre!("Failed to execute command '{}': {}", cmd, e))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let status = output
+            .status
+            .code()
+            .ok_or_else(|| eyre!("Command '{}' terminated by signal", cmd))?;
+        debug!(
+            "Command '{}' completed with status {}, stdout: {:?}",
+            cmd, status, stdout
+        );
+        Ok((stdout, status))
     }
 }
 
@@ -475,13 +500,40 @@ impl IntoLua for Utils {
     fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
         let utils_table = lua.create_table()?;
 
-        let expand_path_fn =
-            lua.create_function(|_lua, path: String| Ok(Utils::expand_path(&path)))?;
+        utils_table.set(
+            "expand_path",
+            lua.create_function(|_lua, path: String| Ok(Utils::expand_path(&path)))?,
+        )?;
+        utils_table.set(
+            "dirname",
+            lua.create_function(|_lua, path: String| Ok(Utils::dirname(&path)))?,
+        )?;
+        utils_table.set(
+            "chomp",
+            lua.create_function(|_lua, s: String| Ok(Utils::chomp(&s)))?,
+        )?;
+        utils_table.set(
+            "sh",
+            lua.create_function(|lua, args: LuaMultiValue| {
+                let all_args: Vec<String> = args
+                    .into_iter()
+                    .map(|arg| String::from_lua(arg, lua))
+                    .collect::<Result<Vec<_>, _>>()?;
 
-        let dirname_fn = lua.create_function(|_lua, path: String| Ok(Utils::dirname(&path)))?;
+                if all_args.is_empty() {
+                    return Err(LuaError::external(FrorkError::InvalidArguments(
+                        "sh requires at least a command".to_string(),
+                    )));
+                }
 
-        utils_table.set("expand_path", expand_path_fn)?;
-        utils_table.set("dirname", dirname_fn)?;
+                let (cmd, cmd_args) = all_args.split_first().unwrap();
+
+                let result = Utils::sh(cmd, cmd_args)
+                    .map(|(stdout, status)| (Some(stdout), status))
+                    .unwrap_or((None, -1));
+                Ok(result)
+            })?,
+        )?;
 
         Ok(LuaValue::Table(utils_table))
     }
@@ -509,6 +561,8 @@ fn setup_lua(
     };
     lua.register_module("frork", &frork_table)
         .map_err(|e| eyre!("Failed to register Frork module: {}", e))?;
+    lua.register_module("flork", &frork_table)
+        .map_err(|e| eyre!("Failed to register Flork module: {}", e))?;
 
     Ok((lua, frork_table, fennel_module))
 }
