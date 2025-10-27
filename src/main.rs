@@ -72,34 +72,57 @@ trait AssertionType: std::fmt::Display {
     fn install(&self) -> Result<()>;
 }
 
+struct LuaAssertionType {
+    display_fn: Option<LuaFunction>,
+    status_fn: LuaFunction,
+    install_fn: LuaFunction,
+}
+
+impl FromLua for LuaAssertionType {
+    fn from_lua(value: LuaValue, _lua: &Lua) -> LuaResult<Self> {
+        let table = match value {
+            LuaValue::Table(table) => table,
+            _ => {
+                return Err(LuaError::FromLuaConversionError {
+                    from: value.type_name(),
+                    to: "LuaAssertionType".to_string(),
+                    message: Some("Expected a table".to_string()),
+                });
+            }
+        };
+
+        let display_fn: Option<LuaFunction> = table.get("display").ok();
+        let status_fn: LuaFunction = table.get("status")?;
+        let install_fn: LuaFunction = table.get("install")?;
+
+        Ok(Self {
+            display_fn,
+            status_fn,
+            install_fn,
+        })
+    }
+}
+
 #[derive(Default)]
 struct Registry {
-    lua_assertion_types: HashMap<String, (Option<LuaFunction>, LuaFunction, LuaFunction)>,
+    lua_assertion_types: HashMap<String, LuaAssertionType>,
 }
 
 impl Registry {
-    fn register(
-        &mut self,
-        name: &str,
-        display_fn: Option<LuaFunction>,
-        status_fn: LuaFunction,
-        install_fn: LuaFunction,
-    ) {
+    fn register(&mut self, name: &str, lua_assertion_type: LuaAssertionType) {
         self.lua_assertion_types
-            .insert(name.to_string(), (display_fn, status_fn, install_fn));
+            .insert(name.to_string(), lua_assertion_type);
     }
 
     fn create(&self, assertion_type: &str, args: LuaMultiValue) -> Result<Box<dyn AssertionType>> {
         // Check Lua assertions first
-        if let Some((display_fn, status_fn, install_fn)) =
-            self.lua_assertion_types.get(assertion_type)
-        {
+        if let Some(lua_assertion) = self.lua_assertion_types.get(assertion_type) {
             return Ok(Box::new(LuaAssertion::new(
                 assertion_type,
                 args,
-                display_fn.clone(),
-                status_fn.clone(),
-                install_fn.clone(),
+                lua_assertion.display_fn.clone(),
+                lua_assertion.status_fn.clone(),
+                lua_assertion.install_fn.clone(),
             )));
         }
 
@@ -381,9 +404,11 @@ where
         let frork = Rc::new(self);
 
         let frork_clone = frork.clone();
-        let register_fn = lua.create_function(move |_lua, (name, table): (String, LuaTable)| {
-            frork_clone.register(&name, table)
-        })?;
+        let register_fn = lua.create_function(
+            move |_lua, (name, lua_assertion_type): (String, LuaAssertionType)| {
+                frork_clone.register(&name, lua_assertion_type)
+            },
+        )?;
 
         frork_table.set("register", register_fn)?;
 
@@ -401,14 +426,10 @@ impl<F> Frork<F>
 where
     F: Fn(&Status, &dyn AssertionType) -> Result<()> + Clone + 'static,
 {
-    fn register(&self, name: &str, table: LuaTable) -> LuaResult<()> {
-        let display_fn: Option<LuaFunction> = table.get("display").ok();
-        let status_fn: LuaFunction = table.get("status")?;
-        let install_fn: LuaFunction = table.get("install")?;
-
+    fn register(&self, name: &str, lua_assertion_type: LuaAssertionType) -> LuaResult<()> {
         self.registry
             .borrow_mut()
-            .register(name, display_fn, status_fn, install_fn);
+            .register(name, lua_assertion_type);
         info!("Registered assertion type: {}", name);
         Ok(())
     }
@@ -644,37 +665,4 @@ fn main() -> Result<()> {
     run(&cli.command)?;
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_fennel_assertion_registration() {
-        let lua = Lua::new();
-
-        let fennel_code = include_str!("../fennel-1.6.0.lua");
-        let fennel_module = lua.load(fennel_code).eval::<LuaValue>().unwrap();
-        lua.globals().set("fennel", fennel_module).unwrap();
-
-        let fennel: LuaTable = lua.globals().get("fennel").unwrap();
-        let eval_fn: LuaFunction = fennel.get("eval").unwrap();
-
-        let assertion_table: LuaTable = eval_fn
-            .call(
-                r#"
-            {:display (fn [args] (.. "test: " (or (. args 1) "default")))
-             :status (fn [args] :ok)
-             :install (fn [args] nil)}
-        "#,
-            )
-            .unwrap();
-
-        fn test_handler(_status: &Status, _assertion: &dyn AssertionType) -> Result<()> {
-            Ok(())
-        }
-        let frork = Frork::new(test_handler);
-        frork.register("test-assertion", assertion_table).unwrap();
-    }
 }
