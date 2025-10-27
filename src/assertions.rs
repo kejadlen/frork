@@ -8,6 +8,35 @@ use tracing::{debug, error, info};
 use crate::errors::FrorkError;
 use crate::utils::Utils;
 
+pub trait AssertionTypeFactory {
+    fn create(&self, lua: &Lua, args: LuaMultiValue) -> Result<Box<dyn AssertionType>>;
+}
+
+pub struct TypedFactory<T>(std::marker::PhantomData<T>);
+
+impl<T> TypedFactory<T> {
+    pub fn new() -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
+
+impl<T> Default for TypedFactory<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> AssertionTypeFactory for TypedFactory<T>
+where
+    T: AssertionType + FromLuaMulti + 'static,
+{
+    fn create(&self, lua: &Lua, args: LuaMultiValue) -> Result<Box<dyn AssertionType>> {
+        T::from_lua_multi(args, lua)
+            .map(|t| Box::new(t) as Box<dyn AssertionType>)
+            .map_err(|e| eyre!("Failed to create assertion type: {}", e))
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Conflict {
     pub expected: String,
@@ -305,4 +334,3 @@ impl AssertionType for LuaAssertion {
         Ok(())
     }
 }
-

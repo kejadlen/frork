@@ -3,7 +3,8 @@ mod errors;
 mod utils;
 
 use assertions::{
-    AssertionType, Debug, Directory, LuaAssertion, LuaAssertionType, Status, Symlink,
+    AssertionType, AssertionTypeFactory, Debug, Directory, LuaAssertion, LuaAssertionType, Status,
+    Symlink, TypedFactory,
 };
 use clap::{Parser, Subcommand};
 use color_eyre::{Result, eyre::eyre};
@@ -31,6 +32,21 @@ enum Commands {
     Satisfy { script: String },
 }
 
+struct LuaAssertionFactory {
+    assertion_type: String,
+    lua_assertion_type: LuaAssertionType,
+}
+
+impl AssertionTypeFactory for LuaAssertionFactory {
+    fn create(&self, _lua: &Lua, args: LuaMultiValue) -> Result<Box<dyn AssertionType>> {
+        Ok(Box::new(LuaAssertion::new(
+            &self.assertion_type,
+            args,
+            self.lua_assertion_type.clone(),
+        )))
+    }
+}
+
 #[derive(Default)]
 struct Registry {
     lua_assertion_types: HashMap<String, LuaAssertionType>,
@@ -42,32 +58,20 @@ impl Registry {
             .insert(name.to_string(), lua_assertion_type);
     }
 
-    fn create(
-        &self,
-        assertion_type: &str,
-        args: LuaMultiValue,
-        lua: &Lua,
-    ) -> Result<Box<dyn AssertionType>> {
+    fn get_factory(&self, assertion_type: &str) -> Result<Box<dyn AssertionTypeFactory>> {
         // Check Lua assertions first
         if let Some(lua_assertion) = self.lua_assertion_types.get(assertion_type) {
-            return Ok(Box::new(LuaAssertion::new(
-                assertion_type,
-                args,
-                lua_assertion.clone(),
-            )));
+            return Ok(Box::new(LuaAssertionFactory {
+                assertion_type: assertion_type.to_string(),
+                lua_assertion_type: lua_assertion.clone(),
+            }));
         }
 
-        // Fall back to built-in types
+        // Return factory for built-in types
         match assertion_type {
-            "debug" => Debug::from_lua_multi(args, lua)
-                .map(|d| Box::new(d) as Box<dyn AssertionType>)
-                .map_err(|e| FrorkError::from(e).into()),
-            "directory" => Directory::from_lua_multi(args, lua)
-                .map(|d| Box::new(d) as Box<dyn AssertionType>)
-                .map_err(|e| FrorkError::from(e).into()),
-            "symlink" => Symlink::from_lua_multi(args, lua)
-                .map(|s| Box::new(s) as Box<dyn AssertionType>)
-                .map_err(|e| FrorkError::from(e).into()),
+            "debug" => Ok(Box::new(TypedFactory::<Debug>::new())),
+            "directory" => Ok(Box::new(TypedFactory::<Directory>::new())),
+            "symlink" => Ok(Box::new(TypedFactory::<Symlink>::new())),
             _ => Err(FrorkError::UnknownAssertionType {
                 assertion_type: assertion_type.to_string(),
             }
@@ -146,10 +150,13 @@ where
 
         let assertion_args: LuaMultiValue = args_iter.collect();
 
-        let assertion = self
+        let factory = self
             .registry
             .borrow()
-            .create(&assertion_type, assertion_args, &self.lua)
+            .get_factory(&assertion_type)
+            .map_err(LuaError::external)?;
+        let assertion = factory
+            .create(&self.lua, assertion_args)
             .map_err(LuaError::external)?;
         let status = assertion.status().map_err(LuaError::external)?;
 
@@ -230,6 +237,7 @@ fn status(status: &Status, assertion: &dyn AssertionType) -> Result<()> {
     match status {
         Status::Ok => println!("ok: {}", assertion),
         Status::Missing => println!("missing: {}", assertion),
+        // TODO show a nicer diff?
         Status::ConflictUpgrade(conflict) => {
             println!("conflict (upgradable): {}", assertion);
             println!("  expected: {}", conflict.expected);
@@ -248,11 +256,26 @@ fn satisfy(status: &Status, assertion: &dyn AssertionType) -> Result<()> {
             println!("ok: {}", assertion);
         }
         Status::ConflictUpgrade(conflict) => {
-            todo!(
-                "Handle conflict upgrade status in satisfy: expected: {}, actual: {}",
-                conflict.expected,
-                conflict.actual
-            );
+            println!("conflict (upgradable): {}", assertion);
+            println!("  expected: {}", conflict.expected);
+            println!("    actual: {}", conflict.actual);
+
+            use std::io::{self, Write};
+            print!("Upgrade? [y/N]: ");
+            io::stdout().flush()?;
+
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+
+            match input.trim().to_lowercase().as_str() {
+                "y" | "yes" => {
+                    assertion.install()?;
+                    println!("ok: {}", assertion);
+                }
+                _ => {
+                    println!("skipped: {}", assertion);
+                }
+            }
         }
     }
     Ok(())
