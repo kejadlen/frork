@@ -162,7 +162,12 @@ impl Registry {
             .insert(name.to_string(), lua_assertion_type);
     }
 
-    fn create(&self, assertion_type: &str, args: LuaMultiValue) -> Result<Box<dyn AssertionType>> {
+    fn create(
+        &self,
+        assertion_type: &str,
+        args: LuaMultiValue,
+        lua: &Lua,
+    ) -> Result<Box<dyn AssertionType>> {
         // Check Lua assertions first
         if let Some(lua_assertion) = self.lua_assertion_types.get(assertion_type) {
             return Ok(Box::new(LuaAssertion::new(
@@ -174,13 +179,13 @@ impl Registry {
 
         // Fall back to built-in types
         match assertion_type {
-            "debug" => Debug::from_lua_multi(args, &Lua::new())
+            "debug" => Debug::from_lua_multi(args, lua)
                 .map(|d| Box::new(d) as Box<dyn AssertionType>)
                 .map_err(|e| FrorkError::from(e).into()),
-            "directory" => Directory::from_lua_multi(args, &Lua::new())
+            "directory" => Directory::from_lua_multi(args, lua)
                 .map(|d| Box::new(d) as Box<dyn AssertionType>)
                 .map_err(|e| FrorkError::from(e).into()),
-            "symlink" => Symlink::from_lua_multi(args, &Lua::new())
+            "symlink" => Symlink::from_lua_multi(args, lua)
                 .map(|s| Box::new(s) as Box<dyn AssertionType>)
                 .map_err(|e| FrorkError::from(e).into()),
             _ => Err(FrorkError::UnknownAssertionType {
@@ -407,13 +412,15 @@ struct Frork<F> {
     // new assertion types at runtime when called from Lua/Fennel code
     registry: RefCell<Registry>,
     handle_status: F,
+    lua: Lua,
 }
 
 impl<F> Frork<F> {
-    fn new(handle_status: F) -> Self {
+    fn new(handle_status: F, lua: Lua) -> Self {
         Self {
             registry: RefCell::new(Registry::default()),
             handle_status,
+            lua,
         }
     }
 }
@@ -473,7 +480,7 @@ where
         let assertion = self
             .registry
             .borrow()
-            .create(&assertion_type, assertion_args)
+            .create(&assertion_type, assertion_args, &self.lua)
             .map_err(LuaError::external)?;
         let status = assertion.status().map_err(LuaError::external)?;
 
@@ -596,7 +603,7 @@ fn setup_lua(
     lua.register_module("fennel", &fennel_module)
         .map_err(|e| eyre!("Failed to register Fennel module: {}", e))?;
 
-    let frork_table = match Frork::new(handle_status)
+    let frork_table = match Frork::new(handle_status, lua.clone())
         .into_lua(&lua)
         .map_err(|e| eyre!("Failed to create Frork table: {}", e))?
     {
