@@ -221,7 +221,42 @@ fn run_script(
     script: &str,
     handle_status: impl Fn(&Status, &dyn AssertionType) -> Result<()> + Clone + 'static,
 ) -> Result<()> {
-    let (lua, _frork_module, _fennel_module) = setup_lua(handle_status)?;
+    let (lua, _frork_module, fennel_module) = setup_lua(handle_status)?;
+
+    // Add script directory to Lua and Fennel search paths
+    let script_path = std::path::Path::new(script);
+    if let Some(script_dir) = script_path.parent()
+        && let Some(script_dir_str) = script_dir.to_str()
+    {
+        let package_table: LuaTable = lua
+            .globals()
+            .get("package")
+            .map_err(|e| eyre!("Failed to get package table: {}", e))?;
+
+        // Add to Lua search path
+        let current_path: String = package_table
+            .get("path")
+            .map_err(|e| eyre!("Failed to get current Lua path: {}", e))?;
+        let new_path = format!(
+            "{};{}/?.lua;{}/?/init.lua",
+            current_path, script_dir_str, script_dir_str
+        );
+        package_table
+            .set("path", new_path)
+            .map_err(|e| eyre!("Failed to set Lua path: {}", e))?;
+
+        // Add to Fennel search path
+        let current_fennel_path: String = fennel_module
+            .get("path")
+            .unwrap_or_else(|_| "./?.fnl;./?/init.fnl".to_string());
+        let new_fennel_path = format!(
+            "{};{}/?.fnl;{}/?/init.fnl",
+            current_fennel_path, script_dir_str, script_dir_str
+        );
+        fennel_module
+            .set("path", new_fennel_path)
+            .map_err(|e| eyre!("Failed to set Fennel path: {}", e))?;
+    }
 
     lua.load(format!(
         r#"require("fennel").install().dofile("{}")"#,
