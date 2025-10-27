@@ -1,7 +1,7 @@
 use mlua::prelude::*;
 use thiserror::Error;
 
-#[derive(Error, Debug, Clone)]
+#[derive(Error, Debug, Clone, PartialEq)]
 pub enum FrorkError {
     #[error("No operation specified")]
     NoOperation,
@@ -15,7 +15,6 @@ pub enum FrorkError {
     Lua(String),
 }
 
-// TODO does this actually work the way I think it does? write a test to find out
 impl From<LuaError> for FrorkError {
     fn from(err: LuaError) -> Self {
         match err {
@@ -31,3 +30,55 @@ impl From<LuaError> for FrorkError {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_frork_error_preserved_through_lua_callback() {
+        let lua = Lua::new();
+
+        // Create a Lua function that returns a FrorkError wrapped in LuaError::external
+        let test_fn = lua
+            .create_function(|_lua, ()| -> LuaResult<()> {
+                Err(LuaError::external(FrorkError::InvalidArguments(
+                    "test error message".to_string(),
+                )))
+            })
+            .unwrap();
+
+        // Call the function and convert the resulting LuaError to FrorkError
+        let result: Result<(), LuaError> = test_fn.call(());
+        let lua_err = result.unwrap_err();
+        let frork_err = FrorkError::from(lua_err);
+
+        // Check that the original FrorkError is preserved
+        assert_eq!(
+            frork_err,
+            FrorkError::InvalidArguments("test error message".to_string())
+        );
+    }
+
+    #[test]
+    fn test_regular_lua_error_converted() {
+        let lua = Lua::new();
+
+        // Create a Lua function that returns a regular Lua error
+        let test_fn = lua
+            .create_function(|_lua, ()| -> LuaResult<()> {
+                Err(LuaError::RuntimeError("regular lua error".to_string()))
+            })
+            .unwrap();
+
+        // Call the function and convert the resulting LuaError to FrorkError
+        let result: Result<(), LuaError> = test_fn.call(());
+        let lua_err = result.unwrap_err();
+        let frork_err = FrorkError::from(lua_err);
+
+        // Check that it's converted to FrorkError::Lua (wrapped as callback error)
+        assert_eq!(
+            frork_err,
+            FrorkError::Lua("Callback error: runtime error: regular lua error".to_string())
+        );
+    }
+}
