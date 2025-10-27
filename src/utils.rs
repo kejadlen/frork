@@ -59,6 +59,11 @@ impl Utils {
         Ok(expanded)
     }
 
+    pub fn platform() -> Result<String> {
+        let (output, _status) = Self::sh("uname", &["-s".to_string()])?;
+        Ok(Self::chomp(&output).to_lowercase())
+    }
+
     pub fn sh(cmd: &str, args: &[String]) -> Result<(String, i32)> {
         debug!("Executing command: {} with args: {:?}", cmd, args);
 
@@ -100,6 +105,8 @@ impl IntoLua for Utils {
             "chomp",
             lua.create_function(|_lua, s: String| Ok(Utils::chomp(&s)))?,
         )?;
+        let platform = Utils::platform().map_err(LuaError::external)?;
+        utils_table.set("platform", platform)?;
 
         utils_table.set(
             "sh",
