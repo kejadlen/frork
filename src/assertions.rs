@@ -288,6 +288,9 @@ impl std::fmt::Display for Git {
 
 impl AssertionType for Git {
     fn status(&self) -> Result<Status> {
+        // First, ensure git binary is available
+        Utils::assert_bin("git")?;
+
         let dir_path = Path::new(&self.dir);
 
         // Check if directory exists
@@ -341,6 +344,9 @@ impl AssertionType for Git {
     }
 
     fn install(&self) -> Result<()> {
+        // Ensure git binary is available before attempting clone
+        Utils::assert_bin("git")?;
+
         let (_output, exit_code) = Utils::sh(
             "git",
             &[

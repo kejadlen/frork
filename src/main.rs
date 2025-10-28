@@ -3,8 +3,8 @@ mod errors;
 mod utils;
 
 use assertions::{
-    AssertionType, AssertionTypeFactory, Debug, Directory, Git, LuaAssertion, LuaAssertionType, Status,
-    Symlink, TypedFactory,
+    AssertionType, AssertionTypeFactory, Debug, Directory, Git, LuaAssertion, LuaAssertionType,
+    Status, Symlink, TypedFactory,
 };
 use clap::{Parser, Subcommand};
 use color_eyre::{Result, eyre::eyre};

@@ -163,6 +163,18 @@ impl Utils {
         );
         Ok((stdout, status))
     }
+
+    pub fn assert_bin(bin_name: &str) -> Result<()> {
+        // Use 'which' command to check if binary exists in PATH
+        let (_output, exit_code) = Self::sh("which", &[bin_name.to_string()])?;
+
+        if exit_code == 0 {
+            debug!("Binary '{}' found in PATH", bin_name);
+            Ok(())
+        } else {
+            Err(eyre!("Required binary '{}' not found in PATH", bin_name))
+        }
+    }
 }
 
 impl IntoLua for Utils {
@@ -170,7 +182,7 @@ impl IntoLua for Utils {
         let utils_table = lua.create_table()?;
 
         utils_table.set(
-            "expand_path",
+            "expand-path",
             lua.create_function(|_lua, path: String| {
                 Utils::expand_path(&path).map_err(LuaError::external)
             })?,
@@ -218,6 +230,12 @@ impl IntoLua for Utils {
                 Utils::sh(&cmd, &cmd_args)
                     .map(|(stdout, status)| (Some(stdout), status))
                     .map_err(LuaError::external)
+            })?,
+        )?;
+        utils_table.set(
+            "assert-bin",
+            lua.create_function(|_lua, bin_name: String| {
+                Utils::assert_bin(&bin_name).map_err(LuaError::external)
             })?,
         )?;
 
