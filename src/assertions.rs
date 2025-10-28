@@ -144,12 +144,12 @@ impl std::fmt::Display for Symlink {
 
 impl AssertionType for Symlink {
     fn status(&self) -> Result<Status> {
-        if !Path::new(self.target.as_str()).exists() {
+        if !Path::new(&self.target).exists() {
             return Ok(Status::Missing);
         }
 
-        if let Ok(link_target) = fs::read_link(self.target.as_str()) {
-            if link_target == Path::new(self.source.as_str()) {
+        if let Ok(link_target) = fs::read_link(&self.target) {
+            if link_target == Path::new(&self.source) {
                 Ok(Status::Ok)
             } else {
                 todo!(
@@ -173,7 +173,7 @@ impl AssertionType for Symlink {
 
     fn install(&self) -> Result<()> {
         use std::os::unix::fs;
-        fs::symlink(self.source.as_str(), self.target.as_str())
+        fs::symlink(&self.source, &self.target)
             .map_err(|e| eyre!("Failed to create symlink: {}", e))?;
         debug!("created: {}", self);
         Ok(())
@@ -199,7 +199,7 @@ impl std::fmt::Display for Directory {
 
 impl AssertionType for Directory {
     fn status(&self) -> Result<Status> {
-        let path = Path::new(self.path.as_str());
+        let path = Path::new(&self.path);
         if path.is_dir() {
             Ok(Status::Ok)
         } else if path.exists() {
@@ -213,7 +213,7 @@ impl AssertionType for Directory {
     }
 
     fn install(&self) -> Result<()> {
-        std::fs::create_dir_all(self.path.as_str())
+        std::fs::create_dir_all(&self.path)
             .map_err(|e| eyre!("Failed to create directory: {}", e))?;
         debug!("created: {}", self);
         Ok(())

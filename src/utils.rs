@@ -2,6 +2,8 @@ use color_eyre::{Result, eyre::eyre};
 use mlua::prelude::*;
 use regex::Regex;
 use std::env;
+use std::ffi::OsStr;
+use std::ops::Deref;
 use std::path::Path;
 use std::process::Command;
 use std::sync::LazyLock;
@@ -52,6 +54,32 @@ impl FromLua for ExpandedPath {
     fn from_lua(value: LuaValue, lua: &Lua) -> LuaResult<Self> {
         let path_str = String::from_lua(value, lua)?;
         Self::new(&path_str).map_err(LuaError::external)
+    }
+}
+
+impl Deref for ExpandedPath {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl AsRef<str> for ExpandedPath {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<OsStr> for ExpandedPath {
+    fn as_ref(&self) -> &OsStr {
+        OsStr::new(&self.0)
+    }
+}
+
+impl AsRef<Path> for ExpandedPath {
+    fn as_ref(&self) -> &Path {
+        Path::new(&self.0)
     }
 }
 
