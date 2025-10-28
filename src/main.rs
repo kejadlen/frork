@@ -3,7 +3,7 @@ mod errors;
 mod utils;
 
 use assertions::{
-    AssertionType, AssertionTypeFactory, Debug, Directory, LuaAssertion, LuaAssertionType, Status,
+    AssertionType, AssertionTypeFactory, Debug, Directory, Git, LuaAssertion, LuaAssertionType, Status,
     Symlink, TypedFactory,
 };
 use clap::{Parser, Subcommand};
@@ -71,6 +71,7 @@ impl Registry {
         match assertion_type {
             "debug" => Ok(Box::new(TypedFactory::<Debug>::new())),
             "directory" => Ok(Box::new(TypedFactory::<Directory>::new())),
+            "git" => Ok(Box::new(TypedFactory::<Git>::new())),
             "symlink" => Ok(Box::new(TypedFactory::<Symlink>::new())),
             _ => Err(FrorkError::UnknownAssertionType {
                 assertion_type: assertion_type.to_string(),

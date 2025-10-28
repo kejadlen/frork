@@ -6,7 +6,7 @@ use std::path::Path;
 use tracing::{debug, error, info};
 
 use crate::errors::FrorkError;
-use crate::utils::ExpandedPath;
+use crate::utils::{ExpandedPath, Utils};
 
 pub trait AssertionTypeFactory {
     fn create(&self, lua: &Lua, args: LuaMultiValue) -> Result<Box<dyn AssertionType>>;
@@ -264,6 +264,97 @@ impl AssertionType for Debug {
         install_fn
             .call::<()>(LuaMultiValue::new())
             .map_err(|e| eyre!("Debug install function failed: {}", e))?;
+        Ok(())
+    }
+}
+
+pub struct Git {
+    pub dir: ExpandedPath,
+    pub remote_url: String,
+}
+
+impl FromLuaMulti for Git {
+    fn from_lua_multi(args: LuaMultiValue, lua: &Lua) -> LuaResult<Self> {
+        let (dir, remote_url) = <(ExpandedPath, String)>::from_lua_multi(args, lua)?;
+        Ok(Self { dir, remote_url })
+    }
+}
+
+impl std::fmt::Display for Git {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "git {} {}", self.dir, self.remote_url)
+    }
+}
+
+impl AssertionType for Git {
+    fn status(&self) -> Result<Status> {
+        let dir_path = Path::new(&self.dir);
+
+        // Check if directory exists
+        if !dir_path.exists() {
+            return Ok(Status::Missing);
+        }
+
+        // Check if it's a directory
+        if !dir_path.is_dir() {
+            return Ok(Status::ConflictUpgrade(Conflict {
+                expected: "directory".to_string(),
+                actual: "file".to_string(),
+            }));
+        }
+
+        // Check if directory is empty (only . and ..)
+        let mut entries =
+            std::fs::read_dir(dir_path).map_err(|e| eyre!("Failed to read directory: {}", e))?;
+        if entries.next().is_none() {
+            return Ok(Status::Missing);
+        }
+
+        // Check if we can get the git remote
+        let (remote_output, exit_code) = Utils::sh(
+            "git",
+            &[
+                "-C".to_string(),
+                self.dir.to_string(),
+                "config".to_string(),
+                "--get".to_string(),
+                "remote.origin.url".to_string(),
+            ],
+        )?;
+
+        if exit_code != 0 {
+            return Ok(Status::ConflictUpgrade(Conflict {
+                expected: format!("git repo with remote {}", self.remote_url),
+                actual: "failed to get remote url".to_string(),
+            }));
+        }
+
+        let current_remote = Utils::chomp(&remote_output);
+        if current_remote == self.remote_url {
+            Ok(Status::Ok)
+        } else {
+            Ok(Status::ConflictUpgrade(Conflict {
+                expected: self.remote_url.clone(),
+                actual: format!("current remote: {}", current_remote),
+            }))
+        }
+    }
+
+    fn install(&self) -> Result<()> {
+        let (_output, exit_code) = Utils::sh(
+            "git",
+            &[
+                "clone".to_string(),
+                self.remote_url.clone(),
+                self.dir.to_string(),
+            ],
+        )?;
+
+        if exit_code != 0 {
+            return Err(eyre!("Failed to clone git repository"));
+        }
+
+        debug!("created: {}", self);
         Ok(())
     }
 }
