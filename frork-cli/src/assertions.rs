@@ -426,3 +426,45 @@ impl AssertionType for LuaAssertion {
         Ok(())
     }
 }
+
+pub struct Brew;
+
+impl FromLuaMulti for Brew {
+    fn from_lua_multi(_args: LuaMultiValue, _lua: &Lua) -> LuaResult<Self> {
+        Ok(Self)
+    }
+}
+
+impl std::fmt::Display for Brew {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "brew")
+    }
+}
+
+impl AssertionType for Brew {
+    fn status(&self) -> Result<Status> {
+        let (_output, exit_code) = Utils::sh("brew", &["--version".to_string()])?;
+        if exit_code == 0 {
+            Ok(Status::Ok)
+        } else {
+            Ok(Status::Missing)
+        }
+    }
+
+    fn install(&self) -> Result<()> {
+        let (_output, exit_code) = Utils::sh(
+            "bash",
+            &[
+                "-c".to_string(),
+                r#"/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)""#.to_string(),
+            ],
+        )?;
+
+        if exit_code != 0 {
+            return Err(eyre!("Failed to install Homebrew"));
+        }
+
+        debug!("installed: {}", self);
+        Ok(())
+    }
+}
