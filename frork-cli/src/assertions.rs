@@ -468,3 +468,92 @@ impl AssertionType for Brew {
         Ok(())
     }
 }
+
+pub struct BrewBundle {
+    pub brewfile: ExpandedPath,
+}
+
+impl FromLuaMulti for BrewBundle {
+    fn from_lua_multi(args: LuaMultiValue, lua: &Lua) -> LuaResult<Self> {
+        let brewfile = ExpandedPath::from_lua_multi(args, lua)?;
+        Ok(Self { brewfile })
+    }
+}
+
+impl std::fmt::Display for BrewBundle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "brew-bundle {}", self.brewfile)
+    }
+}
+
+impl AssertionType for BrewBundle {
+    fn status(&self) -> Result<Status> {
+        // Assert platform is Darwin (macOS)
+        #[cfg(not(target_os = "macos"))]
+        return Err(eyre!("brew-bundle only supported on Darwin/macOS"));
+
+        // Assert brew binary exists
+        Utils::assert_bin("brew")?;
+
+        // First check: brew bundle check --no-upgrade
+        let (_output, exit_code) = Utils::sh_with_envs(
+            "brew",
+            &[
+                "bundle".to_string(),
+                "check".to_string(),
+                "--no-upgrade".to_string(),
+                format!("--file={}", self.brewfile),
+            ],
+            &[("HOMEBREW_NO_AUTO_UPDATE", "true")],
+        )?;
+
+        if exit_code != 0 {
+            return Ok(Status::Missing);
+        }
+
+        // Second check: brew bundle check (without --no-upgrade)
+        let (_output, exit_code) = Utils::sh_with_envs(
+            "brew",
+            &[
+                "bundle".to_string(),
+                "check".to_string(),
+                format!("--file={}", self.brewfile),
+            ],
+            &[("HOMEBREW_NO_AUTO_UPDATE", "true")],
+        )?;
+
+        if exit_code != 0 {
+            return Ok(Status::ConflictUpgrade(Conflict {
+                expected: "up-to-date packages".to_string(),
+                actual: "packages need upgrade".to_string(),
+            }));
+        }
+
+        Ok(Status::Ok)
+    }
+
+    fn install(&self) -> Result<()> {
+        // Assert platform is Darwin (macOS)
+        #[cfg(not(target_os = "macos"))]
+        return Err(eyre!("brew-bundle only supported on Darwin/macOS"));
+
+        // Assert brew binary exists
+        Utils::assert_bin("brew")?;
+
+        let (_output, exit_code) = Utils::sh(
+            "brew",
+            &[
+                "bundle".to_string(),
+                "install".to_string(),
+                format!("--file={}", self.brewfile),
+            ],
+        )?;
+
+        if exit_code != 0 {
+            return Err(eyre!("Failed to install brew bundle"));
+        }
+
+        debug!("installed: {}", self);
+        Ok(())
+    }
+}

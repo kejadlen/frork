@@ -3,7 +3,7 @@ mod errors;
 mod utils;
 
 use assertions::{
-    AssertionType, AssertionTypeFactory, Brew, Debug, Directory, Git, LuaAssertion, LuaAssertionType,
+    AssertionType, AssertionTypeFactory, Brew, BrewBundle, Debug, Directory, Git, LuaAssertion, LuaAssertionType,
     Status, Symlink, TypedFactory,
 };
 use clap::{Parser, Subcommand};
@@ -70,6 +70,7 @@ impl Registry {
         // Return factory for built-in types
         match assertion_type {
             "brew" => Ok(Box::new(TypedFactory::<Brew>::new())),
+            "brew-bundle" => Ok(Box::new(TypedFactory::<BrewBundle>::new())),
             "debug" => Ok(Box::new(TypedFactory::<Debug>::new())),
             "directory" => Ok(Box::new(TypedFactory::<Directory>::new())),
             "git" => Ok(Box::new(TypedFactory::<Git>::new())),
