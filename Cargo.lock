@@ -255,8 +255,17 @@ checksum = "52051878f80a721bb68ebfbc930e07b65ba72f2da88968ea5c06fd6ca3d3a127"
 name = "frork"
 version = "0.1.0"
 dependencies = [
+ "frork-lib",
+ "mlua",
+]
+
+[[package]]
+name = "frork-cli"
+version = "0.1.0"
+dependencies = [
  "clap",
  "color-eyre",
+ "frork-lib",
  "mlua",
  "regex",
  "serde",
@@ -264,6 +273,10 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
 ]
+
+[[package]]
+name = "frork-lib"
+version = "0.1.0"
 
 [[package]]
 name = "gimli"
@@ -366,6 +379,7 @@ dependencies = [
  "either",
  "erased-serde",
  "mlua-sys",
+ "mlua_derive",
  "num-traits",
  "parking_lot",
  "rustc-hash",
@@ -385,6 +399,17 @@ dependencies = [
  "lua-src",
  "luajit-src",
  "pkg-config",
+]
+
+[[package]]
+name = "mlua_derive"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "465bddde514c4eb3b50b543250e97c1d4b284fa3ef7dc0ba2992c77545dbceb2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

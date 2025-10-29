@@ -1,0 +1,11 @@
+[package]
+name = "frork"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+frork-lib = { path = "../frork-lib" }
+mlua = { version = "*", features = ["lua54", "module"] }

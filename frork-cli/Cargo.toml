@@ -1,0 +1,19 @@
+[package]
+name = "frork-cli"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "frork"
+path = "src/main.rs"
+
+[dependencies]
+frork-lib = { path = "../frork-lib" }
+color-eyre = "*"
+clap = { version = "*", features = ["derive"] }
+mlua = { version = "*", features = ["lua54", "serde", "vendored"] }
+regex = "*"
+serde = { version = "*", features = ["derive"] }
+thiserror = "*"
+tracing = "*"
+tracing-subscriber = "*"

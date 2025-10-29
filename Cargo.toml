@@ -1,14 +1,3 @@
-[package]
-name = "frork"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-color-eyre = "*"
-clap = { version = "*", features = ["derive"] }
-mlua = { version = "*", features = ["lua54", "serde", "vendored"] }
-regex = "*"
-serde = { version = "*", features = ["derive"] }
-thiserror = "*"
-tracing = "*"
-tracing-subscriber = "*"
+[workspace]
+resolver = "3"
+members = ["frork-cli", "frork-lib", "frork-lua"]
