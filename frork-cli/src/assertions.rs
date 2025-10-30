@@ -99,6 +99,8 @@ impl FromLuaMulti for Status {
 pub trait AssertionType: std::fmt::Display {
     fn status(&self) -> Result<Status>;
     fn install(&self) -> Result<()>;
+    fn upgrade(&self) -> Result<()>;
+    fn remove(&self) -> Result<()>;
 }
 
 #[derive(Clone)]
@@ -178,6 +180,14 @@ impl AssertionType for Symlink {
         debug!("created: {}", self);
         Ok(())
     }
+
+    fn upgrade(&self) -> Result<()> {
+        todo!()
+    }
+
+    fn remove(&self) -> Result<()> {
+        todo!()
+    }
 }
 
 pub struct Directory {
@@ -217,6 +227,14 @@ impl AssertionType for Directory {
             .map_err(|e| eyre!("Failed to create directory: {}", e))?;
         debug!("created: {}", self);
         Ok(())
+    }
+
+    fn upgrade(&self) -> Result<()> {
+        todo!()
+    }
+
+    fn remove(&self) -> Result<()> {
+        todo!()
     }
 }
 
@@ -265,6 +283,14 @@ impl AssertionType for Debug {
             .call::<()>(LuaMultiValue::new())
             .map_err(|e| eyre!("Debug install function failed: {}", e))?;
         Ok(())
+    }
+
+    fn upgrade(&self) -> Result<()> {
+        todo!()
+    }
+
+    fn remove(&self) -> Result<()> {
+        todo!()
     }
 }
 
@@ -363,6 +389,14 @@ impl AssertionType for Git {
         debug!("created: {}", self);
         Ok(())
     }
+
+    fn upgrade(&self) -> Result<()> {
+        todo!()
+    }
+
+    fn remove(&self) -> Result<()> {
+        todo!()
+    }
 }
 
 pub struct LuaAssertion {
@@ -425,6 +459,14 @@ impl AssertionType for LuaAssertion {
         debug!("installed: {}", self);
         Ok(())
     }
+
+    fn upgrade(&self) -> Result<()> {
+        todo!()
+    }
+
+    fn remove(&self) -> Result<()> {
+        todo!()
+    }
 }
 
 pub struct Brew;
@@ -466,6 +508,14 @@ impl AssertionType for Brew {
 
         debug!("installed: {}", self);
         Ok(())
+    }
+
+    fn upgrade(&self) -> Result<()> {
+        todo!()
+    }
+
+    fn remove(&self) -> Result<()> {
+        todo!()
     }
 }
 
@@ -555,5 +605,13 @@ impl AssertionType for BrewBundle {
 
         debug!("installed: {}", self);
         Ok(())
+    }
+
+    fn upgrade(&self) -> Result<()> {
+        todo!()
+    }
+
+    fn remove(&self) -> Result<()> {
+        todo!()
     }
 }

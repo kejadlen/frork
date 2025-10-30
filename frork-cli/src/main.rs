@@ -307,7 +307,7 @@ fn satisfy(status: &Status, assertion: &dyn AssertionType) -> Result<()> {
 
             match input.trim().to_lowercase().as_str() {
                 "y" | "yes" => {
-                    assertion.install()?;
+                    assertion.upgrade()?;
                     println!("ok: {}", assertion);
                 }
                 _ => {
