@@ -148,8 +148,15 @@ impl Utils {
         Self::sh_with_envs(cmd, args, &[])
     }
 
-    pub fn sh_with_envs(cmd: &str, args: &[String], env_vars: &[(&str, &str)]) -> Result<(String, i32)> {
-        debug!("Executing command: {} with args: {:?} and envs: {:?}", cmd, args, env_vars);
+    pub fn sh_with_envs(
+        cmd: &str,
+        args: &[String],
+        env_vars: &[(&str, &str)],
+    ) -> Result<(String, i32)> {
+        debug!(
+            "Executing command: {} with args: {:?} and envs: {:?}",
+            cmd, args, env_vars
+        );
 
         let mut command = Command::new(cmd);
         command.args(args);

@@ -485,6 +485,11 @@ impl std::fmt::Display for Brew {
 
 impl AssertionType for Brew {
     fn status(&self) -> Result<Status> {
+        // Early return if brew command is not in PATH
+        if Utils::assert_bin("brew").is_err() {
+            return Ok(Status::Missing);
+        }
+
         let (_output, exit_code) = Utils::sh("brew", &["--version".to_string()])?;
         if exit_code == 0 {
             Ok(Status::Ok)
