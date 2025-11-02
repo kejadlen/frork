@@ -140,26 +140,29 @@ impl Utils {
     }
 
     pub fn platform() -> Result<String> {
-        let (output, _status) = Self::sh("uname", &["-s".to_string()])?;
+        let (output, _status) = Self::sh("uname", &["-s"])?;
         Ok(Self::chomp(&output).to_lowercase())
     }
 
-    pub fn sh(cmd: &str, args: &[String]) -> Result<(String, i32)> {
+    pub fn sh<T: AsRef<str>>(cmd: &str, args: &[T]) -> Result<(String, i32)> {
         Self::sh_with_envs(cmd, args, &[])
     }
 
-    pub fn sh_with_envs(
+    pub fn sh_with_envs<T: AsRef<str>>(
         cmd: &str,
-        args: &[String],
+        args: &[T],
         env_vars: &[(&str, &str)],
     ) -> Result<(String, i32)> {
+        let args_display: Vec<&str> = args.iter().map(|arg| arg.as_ref()).collect();
         debug!(
-            "Executing command: {} with args: {:?} and envs: {:?}",
-            cmd, args, env_vars
+            "Executing command: {} with args: {} and envs: {:?}",
+            cmd,
+            args_display.join(" "),
+            env_vars
         );
 
         let mut command = Command::new(cmd);
-        command.args(args);
+        command.args(args.iter().map(|arg| arg.as_ref()));
         command.envs(env_vars.iter().map(|(k, v)| (*k, *v)));
 
         let output = command
@@ -172,15 +175,17 @@ impl Utils {
             .code()
             .ok_or_else(|| eyre!("Command '{}' terminated by signal", cmd))?;
         debug!(
-            "Command '{}' completed with status {}, stdout: {:?}",
-            cmd, status, stdout
+            "Command '{}' completed with status {}, stdout: {}",
+            cmd,
+            status,
+            stdout.trim()
         );
         Ok((stdout, status))
     }
 
     pub fn assert_bin(bin_name: &str) -> Result<()> {
         // Use 'which' command to check if binary exists in PATH
-        let (_output, exit_code) = Self::sh("which", &[bin_name.to_string()])?;
+        let (_output, exit_code) = Self::sh("which", &[bin_name])?;
 
         if exit_code == 0 {
             debug!("Binary '{}' found in PATH", bin_name);

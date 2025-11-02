@@ -342,13 +342,7 @@ impl AssertionType for Git {
         // Check if we can get the git remote
         let (remote_output, exit_code) = Utils::sh(
             "git",
-            &[
-                "-C".to_string(),
-                self.dir.to_string(),
-                "config".to_string(),
-                "--get".to_string(),
-                "remote.origin.url".to_string(),
-            ],
+            &["-C", &self.dir, "config", "--get", "remote.origin.url"],
         )?;
 
         if exit_code != 0 {
@@ -373,14 +367,7 @@ impl AssertionType for Git {
         // Ensure git binary is available before attempting clone
         Utils::assert_bin("git")?;
 
-        let (_output, exit_code) = Utils::sh(
-            "git",
-            &[
-                "clone".to_string(),
-                self.remote_url.clone(),
-                self.dir.to_string(),
-            ],
-        )?;
+        let (_output, exit_code) = Utils::sh("git", &["clone", &self.remote_url, &self.dir])?;
 
         if exit_code != 0 {
             return Err(eyre!("Failed to clone git repository"));
@@ -490,7 +477,7 @@ impl AssertionType for Brew {
             return Ok(Status::Missing);
         }
 
-        let (_output, exit_code) = Utils::sh("brew", &["--version".to_string()])?;
+        let (_output, exit_code) = Utils::sh("brew", &["--version"])?;
         if exit_code == 0 {
             Ok(Status::Ok)
         } else {
@@ -498,17 +485,18 @@ impl AssertionType for Brew {
         }
     }
 
+    // This needs sudo - figure out how to make this work through frork
     fn install(&self) -> Result<()> {
-        let (_output, exit_code) = Utils::sh(
+        let (output, exit_code) = Utils::sh(
             "bash",
             &[
-                "-c".to_string(),
-                r#"/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)""#.to_string(),
+                "-c",
+                r#"/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)""#,
             ],
         )?;
 
         if exit_code != 0 {
-            return Err(eyre!("Failed to install Homebrew"));
+            return Err(eyre!("Failed to install Homebrew: {}", output));
         }
 
         debug!("installed: {}", self);
@@ -551,14 +539,10 @@ impl AssertionType for BrewBundle {
         Utils::assert_bin("brew")?;
 
         // First check: brew bundle check --no-upgrade
+        let file_arg = format!("--file={}", self.brewfile);
         let (_output, exit_code) = Utils::sh_with_envs(
             "brew",
-            &[
-                "bundle".to_string(),
-                "check".to_string(),
-                "--no-upgrade".to_string(),
-                format!("--file={}", self.brewfile),
-            ],
+            &["bundle", "check", "--no-upgrade", &file_arg],
             &[("HOMEBREW_NO_AUTO_UPDATE", "true")],
         )?;
 
@@ -567,13 +551,10 @@ impl AssertionType for BrewBundle {
         }
 
         // Second check: brew bundle check (without --no-upgrade)
+        let file_arg = format!("--file={}", self.brewfile);
         let (_output, exit_code) = Utils::sh_with_envs(
             "brew",
-            &[
-                "bundle".to_string(),
-                "check".to_string(),
-                format!("--file={}", self.brewfile),
-            ],
+            &["bundle", "check", &file_arg],
             &[("HOMEBREW_NO_AUTO_UPDATE", "true")],
         )?;
 
@@ -595,14 +576,8 @@ impl AssertionType for BrewBundle {
         // Assert brew binary exists
         Utils::assert_bin("brew")?;
 
-        let (_output, exit_code) = Utils::sh(
-            "brew",
-            &[
-                "bundle".to_string(),
-                "install".to_string(),
-                format!("--file={}", self.brewfile),
-            ],
-        )?;
+        let file_arg = format!("--file={}", self.brewfile);
+        let (_output, exit_code) = Utils::sh("brew", &["bundle", "install", &file_arg])?;
 
         if exit_code != 0 {
             return Err(eyre!("Failed to install brew bundle"));
