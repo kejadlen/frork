@@ -17,3 +17,8 @@ serde = { version = "*", features = ["derive"] }
 thiserror = "*"
 tracing = "*"
 tracing-subscriber = "*"
+
+[dev-dependencies]
+assert_cmd = "*"
+predicates = "*"
+tempfile = "*"
