@@ -2,7 +2,7 @@
 
 ## Project
 
-Flork (frork) is a Fennel-based configuration management tool inspired by [bork](https://bork.sh/), rewritten in Rust. It evaluates declarative Fennel scripts that describe the desired state of a system (symlinks, directories, git repos, Homebrew packages) and can check status or satisfy (install/fix) each assertion.
+frork is a Fennel-based configuration management tool inspired by [bork](https://bork.sh/), rewritten in Rust. It evaluates declarative Fennel scripts that describe the desired state of a system (symlinks, directories, git repos, Homebrew packages) and can check status or satisfy (install/fix) each assertion.
 
 ## Repository layout
 

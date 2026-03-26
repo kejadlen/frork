@@ -190,19 +190,17 @@ fn setup_lua(
         .eval()
         .map_err(|e| eyre!("Failed to load Fennel: {}", e))?;
     lua.register_module("fennel", &fennel_module)
-        .map_err(|e| eyre!("Failed to register Fennel module: {}", e))?;
+        .map_err(|e| eyre!("Failed to register fennel module: {}", e))?;
 
     let frork_table = match Frork::new(handle_status, lua.clone())
         .into_lua(&lua)
-        .map_err(|e| eyre!("Failed to create Frork table: {}", e))?
+        .map_err(|e| eyre!("Failed to create frork table: {}", e))?
     {
         LuaValue::Table(table) => table,
         _ => unreachable!(),
     };
     lua.register_module("frork", &frork_table)
-        .map_err(|e| eyre!("Failed to register Frork module: {}", e))?;
-    lua.register_module("flork", &frork_table)
-        .map_err(|e| eyre!("Failed to register Flork module: {}", e))?;
+        .map_err(|e| eyre!("Failed to register frork module: {}", e))?;
 
     Ok((lua, frork_table, fennel_module))
 }
