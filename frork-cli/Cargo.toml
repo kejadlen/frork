@@ -9,7 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 frork-lib = { path = "../frork-lib" }
-color-eyre = "*"
+miette = { version = "*", features = ["fancy"] }
 fs-err = "*"
 clap = { version = "*", features = ["derive", "env"] }
 mlua = { version = "*", features = ["lua54", "serde", "vendored"] }

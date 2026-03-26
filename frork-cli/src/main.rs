@@ -20,9 +20,9 @@ use assertions::Symlink;
 use assertions::TypedFactory;
 use clap::Parser;
 use clap::Subcommand;
-use color_eyre::Result;
-use color_eyre::eyre::eyre;
 use errors::FrorkError;
+use miette::Result;
+use miette::miette;
 use mlua::prelude::*;
 use tracing::info;
 use utils::Utils;
@@ -188,19 +188,19 @@ fn setup_lua(
     let fennel_module: LuaTable = lua
         .load(fennel_code)
         .eval()
-        .map_err(|e| eyre!("Failed to load Fennel: {}", e))?;
+        .map_err(|e| miette!("Failed to load Fennel: {}", e))?;
     lua.register_module("fennel", &fennel_module)
-        .map_err(|e| eyre!("Failed to register fennel module: {}", e))?;
+        .map_err(|e| miette!("Failed to register fennel module: {}", e))?;
 
     let frork_table = match Frork::new(handle_status, lua.clone())
         .into_lua(&lua)
-        .map_err(|e| eyre!("Failed to create frork table: {}", e))?
+        .map_err(|e| miette!("Failed to create frork table: {}", e))?
     {
         LuaValue::Table(table) => table,
         _ => unreachable!(),
     };
     lua.register_module("frork", &frork_table)
-        .map_err(|e| eyre!("Failed to register frork module: {}", e))?;
+        .map_err(|e| miette!("Failed to register frork module: {}", e))?;
 
     Ok((lua, frork_table, fennel_module))
 }
@@ -213,18 +213,18 @@ fn run_code(
 
     let ok_fn: LuaFunction = frork_module
         .get("ok")
-        .map_err(|e| eyre!("Failed to get frork.ok: {}", e))?;
+        .map_err(|e| miette!("Failed to get frork.ok: {}", e))?;
     lua.globals()
         .set("ok", ok_fn)
-        .map_err(|e| eyre!("Failed to set ok global: {}", e))?;
+        .map_err(|e| miette!("Failed to set ok global: {}", e))?;
 
     let eval_fn: LuaFunction = fennel_module
         .get("eval")
-        .map_err(|e| eyre!("Failed to get fennel.eval: {}", e))?;
+        .map_err(|e| miette!("Failed to get fennel.eval: {}", e))?;
 
     eval_fn
         .call::<()>(code)
-        .map_err(|e| eyre!("Failed to execute fennel code: {}", e))?;
+        .map_err(|e| miette!("Failed to execute fennel code: {}", e))?;
 
     Ok(())
 }
@@ -243,19 +243,19 @@ fn run_script(
         let package_table: LuaTable = lua
             .globals()
             .get("package")
-            .map_err(|e| eyre!("Failed to get package table: {}", e))?;
+            .map_err(|e| miette!("Failed to get package table: {}", e))?;
 
         // Add to Lua search path
         let current_path: String = package_table
             .get("path")
-            .map_err(|e| eyre!("Failed to get current Lua path: {}", e))?;
+            .map_err(|e| miette!("Failed to get current Lua path: {}", e))?;
         let new_path = format!(
             "{};{}/?.lua;{}/?/init.lua",
             current_path, script_dir_str, script_dir_str
         );
         package_table
             .set("path", new_path)
-            .map_err(|e| eyre!("Failed to set Lua path: {}", e))?;
+            .map_err(|e| miette!("Failed to set Lua path: {}", e))?;
 
         // Add to Fennel search path
         let current_fennel_path: String = fennel_module
@@ -267,7 +267,7 @@ fn run_script(
         );
         fennel_module
             .set("path", new_fennel_path)
-            .map_err(|e| eyre!("Failed to set Fennel path: {}", e))?;
+            .map_err(|e| miette!("Failed to set Fennel path: {}", e))?;
     }
 
     lua.load(format!(
@@ -275,7 +275,7 @@ fn run_script(
         script
     ))
     .exec()
-    .map_err(|e| eyre!("Failed to execute script: {}", e))?;
+    .map_err(|e| miette!("Failed to execute script: {}", e))?;
 
     Ok(())
 }
@@ -307,12 +307,16 @@ fn satisfy(status: &Status, assertion: &dyn AssertionType) -> Result<()> {
             println!("  expected: {}", conflict.expected);
             println!("    actual: {}", conflict.actual);
 
-            use std::io::{self, Write};
+            use std::io::Write as _;
             print!("Upgrade? [y/N]: ");
-            io::stdout().flush()?;
+            std::io::stdout()
+                .flush()
+                .map_err(|e| miette!("Failed to flush stdout: {}", e))?;
 
             let mut input = String::new();
-            io::stdin().read_line(&mut input)?;
+            std::io::stdin()
+                .read_line(&mut input)
+                .map_err(|e| miette!("Failed to read input: {}", e))?;
 
             match input.trim().to_lowercase().as_str() {
                 "y" | "yes" => {
@@ -338,7 +342,6 @@ fn run(command: &Commands) -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    color_eyre::install()?;
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();

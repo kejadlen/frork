@@ -1,7 +1,8 @@
+use miette::Diagnostic;
 use mlua::prelude::*;
 use thiserror::Error;
 
-#[derive(Error, Debug, Clone, PartialEq)]
+#[derive(Error, Diagnostic, Debug, Clone, PartialEq)]
 pub enum FrorkError {
     #[error("No operation specified")]
     NoOperation,

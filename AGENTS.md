@@ -50,7 +50,7 @@ just
 ## Conventions
 
 - **Rust edition 2024**, resolver v3 workspace.
-- Error handling: `color-eyre` in the binary, `thiserror` in library code.
+- Error handling: `miette` in the binary, `thiserror` in library code. Library errors derive `miette::Diagnostic`.
 - Logging uses `tracing` with `tracing-subscriber`. Use `tracing::info`, `tracing::debug`, etc. — not `println!` for diagnostic output.
 - Lua integration via `mlua` with vendored Lua 5.4. Fennel compiler is vendored as a Lua source file.
 - All CI checks must pass: `cargo fmt --all --check`, `cargo clippy`, `cargo test`.

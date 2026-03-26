@@ -1,4 +1,4 @@
-use color_eyre::{Result, eyre::eyre};
+use miette::{Result, miette};
 use mlua::prelude::*;
 use regex::Regex;
 use std::env;
@@ -35,7 +35,7 @@ impl From<ExpandedPath> for String {
 }
 
 impl TryFrom<String> for ExpandedPath {
-    type Error = color_eyre::eyre::Error;
+    type Error = miette::Report;
 
     fn try_from(path: String) -> Result<Self> {
         Self::new(&path)
@@ -43,7 +43,7 @@ impl TryFrom<String> for ExpandedPath {
 }
 
 impl TryFrom<&str> for ExpandedPath {
-    type Error = color_eyre::eyre::Error;
+    type Error = miette::Report;
 
     fn try_from(path: &str) -> Result<Self> {
         Self::new(path)
@@ -110,7 +110,8 @@ impl Utils {
 
         // Expand tilde
         if expanded.starts_with('~') {
-            let home = env::var("HOME").map_err(|_| eyre!("HOME environment variable not set"))?;
+            let home =
+                env::var("HOME").map_err(|_| miette!("HOME environment variable not set"))?;
             expanded = expanded.replacen('~', &home, 1);
         }
 
@@ -130,7 +131,7 @@ impl Utils {
             .to_string();
 
         if !missing.is_empty() {
-            return Err(eyre!(
+            return Err(miette!(
                 "Environment variables not found: {}",
                 missing.join(", ")
             ));
@@ -167,13 +168,13 @@ impl Utils {
 
         let output = command
             .output()
-            .map_err(|e| eyre!("Failed to execute command '{}': {}", cmd, e))?;
+            .map_err(|e| miette!("Failed to execute command '{}': {}", cmd, e))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let status = output
             .status
             .code()
-            .ok_or_else(|| eyre!("Command '{}' terminated by signal", cmd))?;
+            .ok_or_else(|| miette!("Command '{}' terminated by signal", cmd))?;
         debug!(
             "Command '{}' completed with status {}, stdout: {}",
             cmd,
@@ -191,7 +192,7 @@ impl Utils {
             debug!("Binary '{}' found in PATH", bin_name);
             Ok(())
         } else {
-            Err(eyre!("Required binary '{}' not found in PATH", bin_name))
+            Err(miette!("Required binary '{}' not found in PATH", bin_name))
         }
     }
 }
