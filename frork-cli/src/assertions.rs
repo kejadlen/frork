@@ -1,5 +1,7 @@
 use fs_err as fs;
-use miette::{Result, miette};
+use miette::IntoDiagnostic as _;
+use miette::Result;
+use miette::miette;
 use mlua::prelude::*;
 use serde::Deserialize;
 use std::path::Path;
@@ -33,7 +35,7 @@ where
     fn create(&self, lua: &Lua, args: LuaMultiValue) -> Result<Box<dyn AssertionType>> {
         T::from_lua_multi(args, lua)
             .map(|t| Box::new(t) as Box<dyn AssertionType>)
-            .map_err(|e| miette!("Failed to create assertion type: {}", e))
+            .map_err(|e| miette!("Failed to create assertion type: {e}"))
     }
 }
 
@@ -178,7 +180,7 @@ impl AssertionType for Symlink {
     fn install(&self) -> Result<()> {
         use std::os::unix::fs;
         fs::symlink(&self.source, &self.target)
-            .map_err(|e| miette!("Failed to create symlink: {}", e))?;
+            .map_err(|e| miette!("Failed to create symlink: {e}"))?;
         debug!("created: {}", self);
         Ok(())
     }
@@ -225,7 +227,7 @@ impl AssertionType for Directory {
     }
 
     fn install(&self) -> Result<()> {
-        fs::create_dir_all(&self.path).map_err(|e| miette!("Failed to create directory: {}", e))?;
+        fs::create_dir_all(&self.path).into_diagnostic()?;
         debug!("created: {}", self);
         Ok(())
     }
@@ -267,7 +269,7 @@ impl AssertionType for Debug {
         if let Some(ref status_fn) = self.status_fn {
             let result = status_fn
                 .call::<Status>(LuaMultiValue::new())
-                .map_err(|e| miette!("Debug status function failed: {}", e))?;
+                .map_err(|e| miette!("Debug status function failed: {e}"))?;
             Ok(result)
         } else {
             Ok(Status::Ok)
@@ -282,7 +284,7 @@ impl AssertionType for Debug {
             .ok_or_else(|| miette!("Install not implemented for debug assertion"))?;
         install_fn
             .call::<()>(LuaMultiValue::new())
-            .map_err(|e| miette!("Debug install function failed: {}", e))?;
+            .map_err(|e| miette!("Debug install function failed: {e}"))?;
         Ok(())
     }
 
@@ -334,8 +336,7 @@ impl AssertionType for Git {
         }
 
         // Check if directory is empty (only . and ..)
-        let mut entries =
-            fs::read_dir(dir_path).map_err(|e| miette!("Failed to read directory: {}", e))?;
+        let mut entries = fs::read_dir(dir_path).into_diagnostic()?;
         if entries.next().is_none() {
             return Ok(Status::Missing);
         }

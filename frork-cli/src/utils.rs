@@ -1,4 +1,5 @@
-use miette::{Result, miette};
+use miette::Result;
+use miette::miette;
 use mlua::prelude::*;
 use regex::Regex;
 use std::env;
@@ -168,7 +169,7 @@ impl Utils {
 
         let output = command
             .output()
-            .map_err(|e| miette!("Failed to execute command '{}': {}", cmd, e))?;
+            .map_err(|e| miette!("Failed to execute command '{}': {e}", cmd))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let status = output
