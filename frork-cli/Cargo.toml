@@ -10,15 +10,17 @@ path = "src/main.rs"
 [dependencies]
 frork-lib = { path = "../frork-lib" }
 color-eyre = "*"
-clap = { version = "*", features = ["derive"] }
+fs-err = "*"
+clap = { version = "*", features = ["derive", "env"] }
 mlua = { version = "*", features = ["lua54", "serde", "vendored"] }
 regex = "*"
 serde = { version = "*", features = ["derive"] }
 thiserror = "*"
 tracing = "*"
-tracing-subscriber = "*"
+tracing-subscriber = { version = "*", features = ["env-filter"] }
 
 [dev-dependencies]
 assert_cmd = "*"
 predicates = "*"
+hegeltest = "*"
 tempfile = "*"

@@ -2,17 +2,28 @@ mod assertions;
 mod errors;
 mod utils;
 
-use assertions::{
-    AssertionType, AssertionTypeFactory, Brew, BrewBundle, Debug, Directory, Git, LuaAssertion,
-    LuaAssertionType, Status, Symlink, TypedFactory,
-};
-use clap::{Parser, Subcommand};
-use color_eyre::{Result, eyre::eyre};
-use errors::FrorkError;
-use mlua::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+
+use assertions::AssertionType;
+use assertions::AssertionTypeFactory;
+use assertions::Brew;
+use assertions::BrewBundle;
+use assertions::Debug;
+use assertions::Directory;
+use assertions::Git;
+use assertions::LuaAssertion;
+use assertions::LuaAssertionType;
+use assertions::Status;
+use assertions::Symlink;
+use assertions::TypedFactory;
+use clap::Parser;
+use clap::Subcommand;
+use color_eyre::Result;
+use color_eyre::eyre::eyre;
+use errors::FrorkError;
+use mlua::prelude::*;
 use tracing::info;
 use utils::Utils;
 

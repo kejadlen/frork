@@ -1,0 +1,2 @@
+# Excludes for cargo-mutants — equivalent or unreachable mutations.
+# Add entries as false positives are discovered.

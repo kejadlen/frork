@@ -1,7 +1,7 @@
 use color_eyre::{Result, eyre::eyre};
+use fs_err as fs;
 use mlua::prelude::*;
 use serde::Deserialize;
-use std::fs;
 use std::path::Path;
 use tracing::{debug, error, info};
 
@@ -100,6 +100,8 @@ pub trait AssertionType: std::fmt::Display {
     fn status(&self) -> Result<Status>;
     fn install(&self) -> Result<()>;
     fn upgrade(&self) -> Result<()>;
+    // Not yet called — will be used when `frork remove` is implemented.
+    #[allow(dead_code)]
     fn remove(&self) -> Result<()>;
 }
 
@@ -223,8 +225,7 @@ impl AssertionType for Directory {
     }
 
     fn install(&self) -> Result<()> {
-        std::fs::create_dir_all(&self.path)
-            .map_err(|e| eyre!("Failed to create directory: {}", e))?;
+        fs::create_dir_all(&self.path).map_err(|e| eyre!("Failed to create directory: {}", e))?;
         debug!("created: {}", self);
         Ok(())
     }
@@ -334,7 +335,7 @@ impl AssertionType for Git {
 
         // Check if directory is empty (only . and ..)
         let mut entries =
-            std::fs::read_dir(dir_path).map_err(|e| eyre!("Failed to read directory: {}", e))?;
+            fs::read_dir(dir_path).map_err(|e| eyre!("Failed to read directory: {}", e))?;
         if entries.next().is_none() {
             return Ok(Status::Missing);
         }
@@ -530,12 +531,13 @@ impl std::fmt::Display for BrewBundle {
 }
 
 impl AssertionType for BrewBundle {
+    #[cfg(not(target_os = "macos"))]
     fn status(&self) -> Result<Status> {
-        // Assert platform is Darwin (macOS)
-        #[cfg(not(target_os = "macos"))]
-        return Err(eyre!("brew-bundle only supported on Darwin/macOS"));
+        Err(eyre!("brew-bundle only supported on Darwin/macOS"))
+    }
 
-        // Assert brew binary exists
+    #[cfg(target_os = "macos")]
+    fn status(&self) -> Result<Status> {
         Utils::assert_bin("brew")?;
 
         // First check: brew bundle check --no-upgrade
@@ -568,12 +570,13 @@ impl AssertionType for BrewBundle {
         Ok(Status::Ok)
     }
 
+    #[cfg(not(target_os = "macos"))]
     fn install(&self) -> Result<()> {
-        // Assert platform is Darwin (macOS)
-        #[cfg(not(target_os = "macos"))]
-        return Err(eyre!("brew-bundle only supported on Darwin/macOS"));
+        Err(eyre!("brew-bundle only supported on Darwin/macOS"))
+    }
 
-        // Assert brew binary exists
+    #[cfg(target_os = "macos")]
+    fn install(&self) -> Result<()> {
         Utils::assert_bin("brew")?;
 
         let file_arg = format!("--file={}", self.brewfile);
