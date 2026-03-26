@@ -334,8 +334,6 @@ dependencies = [
 name = "frork"
 version = "0.1.0"
 dependencies = [
- "clap",
- "frork-lib",
  "mlua",
 ]
 

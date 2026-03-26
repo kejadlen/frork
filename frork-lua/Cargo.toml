@@ -7,6 +7,4 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-frork-lib = { path = "../frork-lib" }
-clap = { version = "*", features = ["derive"] }
 mlua = { version = "*", features = ["lua54", "module"] }
