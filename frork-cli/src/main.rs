@@ -28,7 +28,7 @@ use tracing::info;
 use utils::Utils;
 
 #[derive(Parser)]
-#[command(name = "frork")]
+#[command(name = "frork", version)]
 #[command(about = "A Fennel-based configuration management tool")]
 struct Cli {
     #[command(subcommand)]
