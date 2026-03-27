@@ -12,6 +12,7 @@ frork-lib = { path = "../frork-lib" }
 miette = { version = "*", features = ["fancy"] }
 fs-err = "*"
 clap = { version = "*", features = ["derive", "env"] }
+clap_complete = "*"
 mlua = { version = "*", features = ["lua54", "serde", "vendored"] }
 regex = "*"
 serde = { version = "*", features = ["derive"] }

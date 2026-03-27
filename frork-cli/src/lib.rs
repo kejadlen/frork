@@ -1,3 +1,5 @@
+#![warn(clippy::self_named_module_files)]
+
 pub mod assertions;
-pub mod errors;
+pub mod error;
 pub mod utils;

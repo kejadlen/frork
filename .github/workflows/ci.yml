@@ -12,6 +12,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustup component add clippy rustfmt llvm-tools
       - run: cargo install grcov just
+      - uses: astral-sh/setup-uv@v6
       - run: cargo fmt --check
       - run: just clippy coverage
       # - run: just mutants

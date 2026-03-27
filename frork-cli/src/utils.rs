@@ -10,7 +10,7 @@ use std::process::Command;
 use std::sync::LazyLock;
 use tracing::debug;
 
-use crate::errors::FrorkError;
+use crate::error::FrorkError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpandedPath(String);

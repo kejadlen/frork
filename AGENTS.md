@@ -16,7 +16,7 @@ frork-cli/
     main.rs             # Entrypoint, clap CLI, Lua/Fennel setup
     lib.rs              # Library root — re-exports modules
     assertions.rs       # Assertion types (symlink, directory, git, brew, lua)
-    errors.rs           # thiserror enum (FrorkError)
+    error.rs            # thiserror enum (FrorkError)
     utils.rs            # Shell helpers, path expansion, Lua bindings
   tests/
     cli.rs              # Integration tests via assert_cmd
