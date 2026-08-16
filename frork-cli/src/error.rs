@@ -82,4 +82,14 @@ mod tests {
             FrorkError::Lua("Callback error: runtime error: regular lua error".to_string())
         );
     }
+
+    #[test]
+    fn test_lua_error_outside_callback_uses_display() {
+        let frork_err = FrorkError::from(LuaError::RuntimeError("bare error".to_string()));
+
+        assert_eq!(
+            frork_err,
+            FrorkError::Lua("runtime error: bare error".to_string())
+        );
+    }
 }
