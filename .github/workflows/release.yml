@@ -38,8 +38,10 @@ jobs:
 
       - name: Build
         run: |
-          cargo build --release -p frork-cli
+          FRORK_VERSION="${STEPS_VERSION_OUTPUTS_VERSION}" cargo build --release -p frork-cli
           tar -czf frork-aarch64-apple-darwin.tar.gz -C target/release frork
+        env:
+          STEPS_VERSION_OUTPUTS_VERSION: ${{ steps.version.outputs.version }}
 
       - name: Publish
         run: |

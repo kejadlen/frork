@@ -43,8 +43,11 @@ use mlua::prelude::*;
 use tracing::info;
 use utils::Utils;
 
+/// CalVer, set by build.rs — the crate version is not what ships.
+const VERSION: &str = env!("FRORK_VERSION");
+
 #[derive(Parser)]
-#[command(name = "frork", version)]
+#[command(name = "frork", version = VERSION)]
 #[command(about = "A Fennel-based configuration management tool")]
 struct Cli {
     /// Generate shell completions and exit.
