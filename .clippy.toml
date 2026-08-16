@@ -18,9 +18,15 @@ disallowed-methods = [
     { path = "std::fs::read_dir", reason = "use fs_err::read_dir" },
     { path = "std::fs::read_link", reason = "use fs_err::read_link" },
     { path = "std::fs::set_permissions", reason = "use fs_err::set_permissions" },
+    { path = "std::string::String::from_utf8_lossy", reason = "lossy at OS boundaries — consider OsStr/Path or stay in &[u8]; if input really is text, suppress with an #[allow] and a comment" },
 ]
 
 disallowed-types = [
     { path = "std::fs::File", reason = "use fs_err::File for better error messages" },
     { path = "std::fs::OpenOptions", reason = "use fs_err::OpenOptions" },
+    { path = "chrono::DateTime", reason = "use jiff::Zoned or jiff::Timestamp" },
+    { path = "chrono::NaiveDateTime", reason = "use jiff::civil::DateTime" },
+    { path = "chrono::NaiveDate", reason = "use jiff::civil::Date" },
+    { path = "chrono::NaiveTime", reason = "use jiff::civil::Time" },
+    { path = "chrono::Duration", reason = "use jiff::Span or jiff::SignedDuration" },
 ]

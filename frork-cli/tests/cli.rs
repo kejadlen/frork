@@ -3,7 +3,7 @@ use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::str::contains;
 
 fn cmd() -> Command {
-    Command::from(cargo_bin_cmd!("frork"))
+    cargo_bin_cmd!("frork")
 }
 
 #[test]

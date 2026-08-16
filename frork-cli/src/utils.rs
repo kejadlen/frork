@@ -104,6 +104,8 @@ impl Utils {
     }
 
     pub fn expand_path(path: &str) -> Result<String> {
+        // The pattern is a literal, so it either always compiles or never does.
+        #[allow(clippy::unwrap_used)]
         static ENV_VAR_REGEX: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(r"\$([A-Za-z_][A-Za-z0-9_]*)").unwrap());
 
@@ -118,18 +120,20 @@ impl Utils {
 
         // Expand environment variables
         let mut missing = Vec::new();
-        expanded = ENV_VAR_REGEX
-            .replace_all(&expanded, |caps: &regex::Captures| {
-                let var_name = caps.get(1).unwrap().as_str();
-                match env::var(var_name) {
-                    Ok(value) => value,
-                    Err(_) => {
-                        missing.push(var_name.to_string());
-                        caps.get(0).unwrap().as_str().to_string()
-                    }
+        // Groups 0 and 1 are non-optional in the pattern, so a match
+        // guarantees both are present.
+        #[allow(clippy::unwrap_used)]
+        let replaced = ENV_VAR_REGEX.replace_all(&expanded, |caps: &regex::Captures| {
+            let var_name = caps.get(1).unwrap().as_str();
+            match env::var(var_name) {
+                Ok(value) => value,
+                Err(_) => {
+                    missing.push(var_name.to_string());
+                    caps.get(0).unwrap().as_str().to_string()
                 }
-            })
-            .to_string();
+            }
+        });
+        expanded = replaced.to_string();
 
         if !missing.is_empty() {
             return Err(miette!(
@@ -171,6 +175,9 @@ impl Utils {
             .output()
             .map_err(|e| miette!("Failed to execute command '{}': {e}", cmd))?;
 
+        // `sh` hands stdout to Fennel as a string, and scripts compare it as
+        // text. Non-UTF-8 output would be unusable there either way.
+        #[allow(clippy::disallowed_methods)]
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let status = output
             .status
