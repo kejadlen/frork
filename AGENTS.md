@@ -11,6 +11,7 @@ Cargo.toml                # Workspace root (frork-cli, frork-lib, frork-lua)
 Cargo.lock
 README.md
 justfile                   # Local dev tasks (fmt, clippy, coverage, mutants, install)
+bin/coverage               # grcov coverage report and threshold gate
 .clippy.toml               # Enforces fs-err over std::fs, bans for_each
 .envrc                     # direnv config
 .gitignore
@@ -19,11 +20,14 @@ justfile                   # Local dev tasks (fmt, clippy, coverage, mutants, in
   mutants.toml             # cargo-mutants exclusions
 .ramekin/
   Dockerfile               # Agent container (Node.js + pi + Rust nightly)
-.github/workflows/
-  ci.yml                   # fmt + clippy + coverage (mutants commented out)
-  release.yml              # CalVer release on CI success
+.github/
+  dotslash-config.json     # DotSlash launcher config for releases
+  workflows/
+    ci.yml                 # fmt + clippy + coverage
+    release.yml            # CalVer release on CI success, plus DotSlash
 frork-cli/
   Cargo.toml               # Binary crate — the `frork` CLI
+  build.rs                 # Sets FRORK_VERSION
   fennel-1.6.0.lua         # Vendored Fennel compiler
   src/
     main.rs                # Entrypoint, clap CLI, Lua/Fennel setup, Frork runtime
@@ -67,8 +71,24 @@ just install                # cargo install --locked --path frork-cli
 - Logging uses `tracing` with `tracing-subscriber`. Use `tracing::info`, `tracing::debug`, etc. — not `println!` for diagnostic output.
 - Lua integration via `mlua` with vendored Lua 5.4. The Fennel compiler is vendored as a Lua source file.
 - Filesystem operations use `fs-err` instead of `std::fs`. The `.clippy.toml` disallows bare `std::fs` types and methods so this is enforced at lint time.
-- `.clippy.toml` also bans `Iterator::for_each` and `try_for_each` — use `for` loops for side effects.
+- `.clippy.toml` also bans `Iterator::for_each` and `try_for_each` — use `for` loops for side effects, and `String::from_utf8_lossy`, which silently corrupts non-UTF-8 bytes from the OS.
+- `[lints.clippy]` in `frork-cli/Cargo.toml` warns on `unwrap`, `expect`, `panic!`, slice indexing, and unchecked arithmetic. Opt out per call site with `#[allow(...)]` and a comment explaining why the invariant holds. Test code is exempt via `#![cfg_attr(test, allow(...))]`.
 - All CI checks must pass: `cargo fmt --all --check`, `cargo clippy`, `cargo test`.
+
+## Versioning and release
+
+`frork-cli/build.rs` sets a `FRORK_VERSION` env var that `--version` reports. CI passes CalVer (`YYYY-MM-DD+SHORT_SHA`); local builds substitute the jj change ID and append `-dev`, so a development binary is never mistaken for a release. The crate version in `Cargo.toml` is not what ships.
+
+Releases run on green main builds and attach a macOS aarch64 tarball plus a [DotSlash](https://dotslash-cli.com) launcher.
+
+## Coverage
+
+`bin/coverage` measures library line coverage with grcov and gates on `COVERAGE_THRESHOLD`. The justfile passes `COVERAGE_THRESHOLD=0` because `assertions.rs` has no unit tests yet; raise it as coverage climbs.
+
+Two workspace-specific details the script depends on:
+
+- `LLVM_PROFILE_FILE` must be an absolute path. Cargo runs test binaries with the working directory set to the package root, so a relative path scatters `.profraw` files into each crate's own `target/` and grcov silently reports 0%.
+- `--keep-only 'frork-*/src/**'` scopes the report to workspace crates. A bare `src/**` matches nothing here, and `*/src/**` also picks up dependency sources from the cargo registry.
 
 ## Architecture notes
 
