@@ -1,0 +1,12 @@
+{
+  "outputs": {
+    "frork": {
+      "platforms": {
+        "macos-aarch64": {
+          "regex": "^frork-aarch64-apple-darwin\\.tar\\.gz$",
+          "path": "frork"
+        }
+      }
+    }
+  }
+}
