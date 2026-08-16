@@ -183,11 +183,10 @@ impl Utils {
             .status
             .code()
             .ok_or_else(|| miette!("Command '{}' terminated by signal", cmd))?;
+        let trimmed = stdout.trim();
         debug!(
             "Command '{}' completed with status {}, stdout: {}",
-            cmd,
-            status,
-            stdout.trim()
+            cmd, status, trimmed
         );
         Ok((stdout, status))
     }
@@ -209,63 +208,59 @@ impl IntoLua for Utils {
     fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
         let utils_table = lua.create_table()?;
 
-        utils_table.set(
-            "expand-path",
-            lua.create_function(|_lua, path: String| {
-                Utils::expand_path(&path).map_err(LuaError::external)
-            })?,
-        )?;
-        utils_table.set(
-            "dirname",
-            lua.create_function(|_lua, path: String| {
-                Utils::dirname(&path).map_err(LuaError::external)
-            })?,
-        )?;
-        utils_table.set(
-            "chomp",
-            lua.create_function(|_lua, s: String| Ok(Utils::chomp(&s)))?,
-        )?;
+        // Each function is bound before being set: a multi-line `set(...)?`
+        // strands the `?` failure path on its own line, where it reads as an
+        // uncovered line that no test can reach.
+        let expand_path = lua.create_function(|_lua, path: String| {
+            Utils::expand_path(&path).map_err(LuaError::external)
+        })?;
+        utils_table.set("expand-path", expand_path)?;
+
+        let dirname = lua.create_function(|_lua, path: String| {
+            Utils::dirname(&path).map_err(LuaError::external)
+        })?;
+        utils_table.set("dirname", dirname)?;
+
+        let chomp = lua.create_function(|_lua, s: String| Ok(Utils::chomp(&s)))?;
+        utils_table.set("chomp", chomp)?;
+
         let platform = Utils::platform().map_err(LuaError::external)?;
         utils_table.set("platform", platform)?;
 
-        utils_table.set(
-            "sh",
-            lua.create_function(|_lua, args: LuaVariadic<String>| {
-                let mut args_iter = args.into_iter();
-                let cmd = args_iter.next().ok_or_else(|| {
-                    LuaError::external(FrorkError::InvalidArguments(
-                        "sh requires at least a command".to_string(),
-                    ))
-                })?;
-                let cmd_args: Vec<String> = args_iter.collect();
+        let sh = lua.create_function(|_lua, args: LuaVariadic<String>| {
+            let mut args_iter = args.into_iter();
+            let cmd = args_iter.next().ok_or_else(|| {
+                LuaError::external(FrorkError::InvalidArguments(
+                    "sh requires at least a command".to_string(),
+                ))
+            })?;
+            let cmd_args: Vec<String> = args_iter.collect();
 
-                Ok(Utils::sh(&cmd, &cmd_args)
-                    .map(|(stdout, status)| (Some(stdout), status))
-                    .unwrap_or((None, -1)))
-            })?,
-        )?;
-        utils_table.set(
-            "sh!",
-            lua.create_function(|_lua, args: LuaVariadic<String>| {
-                let mut args_iter = args.into_iter();
-                let cmd = args_iter.next().ok_or_else(|| {
-                    LuaError::external(FrorkError::InvalidArguments(
-                        "sh requires at least a command".to_string(),
-                    ))
-                })?;
-                let cmd_args: Vec<String> = args_iter.collect();
+            Ok(Utils::sh(&cmd, &cmd_args)
+                .map(|(stdout, status)| (Some(stdout), status))
+                .unwrap_or((None, -1)))
+        })?;
+        utils_table.set("sh", sh)?;
 
-                Utils::sh(&cmd, &cmd_args)
-                    .map(|(stdout, status)| (Some(stdout), status))
-                    .map_err(LuaError::external)
-            })?,
-        )?;
-        utils_table.set(
-            "assert-bin",
-            lua.create_function(|_lua, bin_name: String| {
-                Utils::assert_bin(&bin_name).map_err(LuaError::external)
-            })?,
-        )?;
+        let sh_strict = lua.create_function(|_lua, args: LuaVariadic<String>| {
+            let mut args_iter = args.into_iter();
+            let cmd = args_iter.next().ok_or_else(|| {
+                LuaError::external(FrorkError::InvalidArguments(
+                    "sh requires at least a command".to_string(),
+                ))
+            })?;
+            let cmd_args: Vec<String> = args_iter.collect();
+
+            Utils::sh(&cmd, &cmd_args)
+                .map(|(stdout, status)| (Some(stdout), status))
+                .map_err(LuaError::external)
+        })?;
+        utils_table.set("sh!", sh_strict)?;
+
+        let assert_bin = lua.create_function(|_lua, bin_name: String| {
+            Utils::assert_bin(&bin_name).map_err(LuaError::external)
+        })?;
+        utils_table.set("assert-bin", assert_bin)?;
 
         Ok(LuaValue::Table(utils_table))
     }
@@ -396,5 +391,137 @@ mod tests {
 
         let error = result.unwrap_err();
         assert!(error.to_string().contains("sh requires at least a command"));
+
+        // `sh!` shares the argument check but propagates instead of returning nil.
+        let result = lua
+            .load(r#"return utils["sh!"]()"#)
+            .eval::<(Option<String>, i32)>();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_expanded_path_conversions() {
+        unsafe {
+            env::set_var("EXPANDED_PATH_VAR", "expanded");
+        }
+
+        let path = ExpandedPath::new("/tmp/$EXPANDED_PATH_VAR").unwrap();
+
+        assert_eq!(path.as_str(), "/tmp/expanded");
+        assert_eq!(&*path, "/tmp/expanded");
+        assert_eq!(AsRef::<str>::as_ref(&path), "/tmp/expanded");
+        assert_eq!(AsRef::<OsStr>::as_ref(&path), OsStr::new("/tmp/expanded"));
+        assert_eq!(AsRef::<Path>::as_ref(&path), Path::new("/tmp/expanded"));
+        assert_eq!(path.to_string(), "/tmp/expanded");
+
+        assert_eq!(
+            ExpandedPath::try_from("/tmp/$EXPANDED_PATH_VAR").unwrap(),
+            path
+        );
+        assert_eq!(
+            ExpandedPath::try_from("/tmp/$EXPANDED_PATH_VAR".to_string()).unwrap(),
+            path
+        );
+
+        assert_eq!(String::from(path.clone()), "/tmp/expanded");
+        assert_eq!(path.into_string(), "/tmp/expanded");
+
+        unsafe {
+            env::remove_var("EXPANDED_PATH_VAR");
+        }
+    }
+
+    #[test]
+    fn test_expanded_path_from_lua() {
+        let lua = mlua::Lua::new();
+        let echo = lua
+            .create_function(|_lua, path: ExpandedPath| Ok(path.into_string()))
+            .unwrap();
+        lua.globals().set("echo_path", echo).unwrap();
+
+        let expanded: String = lua
+            .load(r#"return echo_path("/tmp/plain")"#)
+            .eval()
+            .unwrap();
+        assert_eq!(expanded, "/tmp/plain");
+
+        // Expansion failures surface as Lua errors rather than panicking.
+        let result = lua
+            .load(r#"return echo_path("/tmp/$EXPANDED_PATH_MISSING")"#)
+            .eval::<String>();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_dirname() {
+        assert_eq!(
+            Utils::dirname("/tmp/a/b.txt").unwrap().as_deref(),
+            Some("/tmp/a")
+        );
+        // The filesystem root has no parent.
+        assert_eq!(Utils::dirname("/").unwrap(), None);
+    }
+
+    #[test]
+    fn test_assert_bin() {
+        assert!(Utils::assert_bin("sh").is_ok());
+
+        let error = Utils::assert_bin("frork-does-not-exist").unwrap_err();
+        assert!(error.to_string().contains("not found in PATH"));
+    }
+
+    #[test]
+    fn test_utils_lua_bindings() {
+        let lua = mlua::Lua::new();
+        let utils_table = Utils {}.into_lua(&lua).unwrap();
+        lua.globals().set("utils", utils_table).unwrap();
+
+        unsafe {
+            env::set_var("LUA_BINDING_VAR", "bound");
+        }
+        let expanded: String = lua
+            .load(r#"return utils["expand-path"]("/tmp/$LUA_BINDING_VAR")"#)
+            .eval()
+            .unwrap();
+        assert_eq!(expanded, "/tmp/bound");
+        unsafe {
+            env::remove_var("LUA_BINDING_VAR");
+        }
+
+        let dir: String = lua
+            .load(r#"return utils.dirname("/tmp/a/b.txt")"#)
+            .eval()
+            .unwrap();
+        assert_eq!(dir, "/tmp/a");
+
+        let chomped: String = lua.load("return utils.chomp('line\\n')").eval().unwrap();
+        assert_eq!(chomped, "line");
+
+        let platform: String = lua.load(r#"return utils.platform"#).eval().unwrap();
+        assert!(!platform.is_empty());
+
+        lua.load(r#"utils["assert-bin"]("sh")"#).exec().unwrap();
+
+        let missing = lua
+            .load(r#"utils["assert-bin"]("frork-does-not-exist")"#)
+            .exec();
+        assert!(missing.is_err());
+    }
+
+    #[test]
+    fn test_sh_debug_logging() {
+        // The debug! arguments are evaluated lazily, so they only run with a
+        // subscriber active at DEBUG level.
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_test_writer()
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            let (stdout, status) =
+                Utils::sh_with_envs("sh", &["-c", "echo $LOGGED"], &[("LOGGED", "value")]).unwrap();
+            assert_eq!(stdout.trim(), "value");
+            assert_eq!(status, 0);
+        });
     }
 }
