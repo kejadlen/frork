@@ -34,7 +34,7 @@ main() {
         --ignore-not-existing \
         --keep-only 'frork-*/src/**' \
         --ignore 'frork-*/src/main.rs' \
-        --excl-line 'cov-excl-line|unreachable!' \
+        --excl-line 'cov-excl-line|unreachable!|todo!' \
         --excl-start 'cov-excl-start' \
         --excl-stop 'cov-excl-stop')
 
