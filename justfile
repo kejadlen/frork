@@ -10,9 +10,8 @@ check:
 clippy:
     cargo clippy -p frork-cli --all-targets -- -D warnings
 
-# Report-only until assertions.rs has tests; raise the threshold as it climbs.
 coverage:
-    COVERAGE_THRESHOLD=0 ./bin/coverage
+    ./bin/coverage
 
 mutants:
     #!/usr/bin/env bash
