@@ -83,7 +83,14 @@ Releases run on green main builds and attach a macOS aarch64 tarball plus a [Dot
 
 ## Coverage
 
-`bin/coverage` measures library line coverage with grcov and gates on `COVERAGE_THRESHOLD`. The justfile passes `COVERAGE_THRESHOLD=0` because `assertions.rs` has no unit tests yet; raise it as coverage climbs.
+`bin/coverage` measures library line coverage with grcov and gates on `COVERAGE_THRESHOLD`, which defaults to 100. The library is at 100% — keep it there rather than lowering the gate.
+
+Unimplemented stubs are excluded rather than counted: the `--excl-line` pattern covers `todo!` alongside `unreachable!` and the explicit `cov-excl-line` marker. The default `upgrade` and `remove` methods on `AssertionType` sit inside a `cov-excl-start`/`cov-excl-stop` pair because a function signature carries its own counter that no line pattern can match.
+
+Coverage regions land on their own line in two cases worth knowing, since both look like untestable code and are neither:
+
+- A `?` on a multi-line call puts the error path on the closing `)?;` line. Bind the arguments first so the call fits on one line.
+- A lazily-formatted `debug!` argument may never be counted where it sits. Bind it to a local before the macro.
 
 Two workspace-specific details the script depends on:
 
@@ -115,6 +122,8 @@ Built-in assertion types:
 - `brew` — checks whether Homebrew is installed
 - `brew-bundle` — runs `brew bundle check`/`install` against a Brewfile (macOS only)
 - `debug` — accepts Lua functions for status/install, used for testing and one-off assertions
+
+`Brew` and `BrewBundle` reach the shell through a `CommandRunner` generic that defaults to `SystemRunner`, so tests substitute a fake instead of running Homebrew. The default type parameter keeps `TypedFactory::<Brew>::new()` and every Fennel script unchanged. `Git` deliberately does not use the seam — its tests run real `git` against a local bare repo, which is offline and tests the actual invocations.
 
 The `Registry` struct dispatches assertion types. It checks Lua-registered types first, then falls back to built-in types. Each built-in type is created through a `TypedFactory<T>` that handles Lua argument conversion via `FromLuaMulti`.
 
