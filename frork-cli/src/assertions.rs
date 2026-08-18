@@ -285,28 +285,77 @@ impl AssertionType for Git {
     }
 }
 
-pub struct Brew;
+/// A seam over shelling out, so assertion types can be exercised without
+/// running the real command. Production code always uses [`SystemRunner`];
+/// only tests substitute anything else.
+pub trait CommandRunner {
+    fn has_bin(&self, bin: &str) -> bool;
+    fn run(&self, cmd: &str, args: &[&str]) -> Result<(String, i32)>;
+    fn run_with_envs(
+        &self,
+        cmd: &str,
+        args: &[&str],
+        envs: &[(&str, &str)],
+    ) -> Result<(String, i32)>;
 
-impl FromLuaMulti for Brew {
-    fn from_lua_multi(_args: LuaMultiValue, _lua: &Lua) -> LuaResult<Self> {
-        Ok(Self)
+    fn require_bin(&self, bin: &str) -> Result<()> {
+        if self.has_bin(bin) {
+            Ok(())
+        } else {
+            Err(miette!("Required binary '{bin}' not found in PATH"))
+        }
     }
 }
 
-impl std::fmt::Display for Brew {
+pub struct SystemRunner;
+
+impl CommandRunner for SystemRunner {
+    fn has_bin(&self, bin: &str) -> bool {
+        Utils::assert_bin(bin).is_ok()
+    }
+
+    fn run(&self, cmd: &str, args: &[&str]) -> Result<(String, i32)> {
+        Utils::sh(cmd, args)
+    }
+
+    fn run_with_envs(
+        &self,
+        cmd: &str,
+        args: &[&str],
+        envs: &[(&str, &str)],
+    ) -> Result<(String, i32)> {
+        Utils::sh_with_envs(cmd, args, envs)
+    }
+}
+
+pub struct Brew<R = SystemRunner> {
+    runner: R,
+}
+
+// Only the production configuration is constructible from Lua; tests build
+// Brew directly with a fake runner.
+impl FromLuaMulti for Brew<SystemRunner> {
+    fn from_lua_multi(_args: LuaMultiValue, _lua: &Lua) -> LuaResult<Self> {
+        Ok(Self {
+            runner: SystemRunner,
+        })
+    }
+}
+
+impl<R> std::fmt::Display for Brew<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "brew")
     }
 }
 
-impl AssertionType for Brew {
+impl<R: CommandRunner> AssertionType for Brew<R> {
     fn status(&self) -> Result<Status> {
         // Early return if brew command is not in PATH.
-        if Utils::assert_bin("brew").is_err() {
+        if !self.runner.has_bin("brew") {
             return Ok(Status::Missing);
         }
 
-        let (_output, exit_code) = Utils::sh("brew", &["--version"])?;
+        let (_output, exit_code) = self.runner.run("brew", &["--version"])?;
         if exit_code == 0 {
             Ok(Status::Ok)
         } else {
@@ -316,13 +365,11 @@ impl AssertionType for Brew {
 
     // This needs sudo — figure out how to make this work through frork.
     fn install(&self) -> Result<()> {
-        let (output, exit_code) = Utils::sh(
-            "bash",
-            &[
-                "-c",
-                r#"/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)""#,
-            ],
-        )?;
+        let install_args = [
+            "-c",
+            r#"/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)""#,
+        ];
+        let (output, exit_code) = self.runner.run("bash", &install_args)?;
 
         if exit_code != 0 {
             return Err(miette!("Failed to install Homebrew: {}", output));
@@ -333,24 +380,30 @@ impl AssertionType for Brew {
     }
 }
 
-pub struct BrewBundle {
+pub struct BrewBundle<R = SystemRunner> {
     pub brewfile: ExpandedPath,
+    // Only read on macOS; every other platform bails before shelling out.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    runner: R,
 }
 
-impl FromLuaMulti for BrewBundle {
+impl FromLuaMulti for BrewBundle<SystemRunner> {
     fn from_lua_multi(args: LuaMultiValue, lua: &Lua) -> LuaResult<Self> {
         let brewfile = ExpandedPath::from_lua_multi(args, lua)?;
-        Ok(Self { brewfile })
+        Ok(Self {
+            brewfile,
+            runner: SystemRunner,
+        })
     }
 }
 
-impl std::fmt::Display for BrewBundle {
+impl<R> std::fmt::Display for BrewBundle<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "brew-bundle {}", self.brewfile)
     }
 }
 
-impl AssertionType for BrewBundle {
+impl<R: CommandRunner> AssertionType for BrewBundle<R> {
     #[cfg(not(target_os = "macos"))]
     fn status(&self) -> Result<Status> {
         Err(miette!("brew-bundle only supported on Darwin/macOS"))
@@ -358,27 +411,26 @@ impl AssertionType for BrewBundle {
 
     #[cfg(target_os = "macos")]
     fn status(&self) -> Result<Status> {
-        Utils::assert_bin("brew")?;
+        self.runner.require_bin("brew")?;
+
+        let file_arg = format!("--file={}", self.brewfile);
+        let no_auto_update = [("HOMEBREW_NO_AUTO_UPDATE", "true")];
 
         // First check: brew bundle check --no-upgrade.
-        let file_arg = format!("--file={}", self.brewfile);
-        let (_output, exit_code) = Utils::sh_with_envs(
-            "brew",
-            &["bundle", "check", "--no-upgrade", &file_arg],
-            &[("HOMEBREW_NO_AUTO_UPDATE", "true")],
-        )?;
+        let strict_args = ["bundle", "check", "--no-upgrade", file_arg.as_str()];
+        let (_output, exit_code) =
+            self.runner
+                .run_with_envs("brew", &strict_args, &no_auto_update)?;
 
         if exit_code != 0 {
             return Ok(Status::Missing);
         }
 
         // Second check: brew bundle check (without --no-upgrade).
-        let file_arg = format!("--file={}", self.brewfile);
-        let (_output, exit_code) = Utils::sh_with_envs(
-            "brew",
-            &["bundle", "check", &file_arg],
-            &[("HOMEBREW_NO_AUTO_UPDATE", "true")],
-        )?;
+        let check_args = ["bundle", "check", file_arg.as_str()];
+        let (_output, exit_code) =
+            self.runner
+                .run_with_envs("brew", &check_args, &no_auto_update)?;
 
         if exit_code != 0 {
             return Ok(Status::ConflictUpgrade(Conflict {
@@ -397,10 +449,12 @@ impl AssertionType for BrewBundle {
 
     #[cfg(target_os = "macos")]
     fn install(&self) -> Result<()> {
-        Utils::assert_bin("brew")?;
+        self.runner.require_bin("brew")?;
 
         let file_arg = format!("--file={}", self.brewfile);
-        let (_output, exit_code) = Utils::sh("brew", &["bundle", "install", &file_arg])?;
+        let (_output, exit_code) = self
+            .runner
+            .run("brew", &["bundle", "install", file_arg.as_str()])?;
 
         if exit_code != 0 {
             return Err(miette!("Failed to install brew bundle"));
@@ -549,6 +603,8 @@ impl AssertionType for LuaAssertion {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
     use tempfile::TempDir;
 
     fn multi(lua: &Lua, script: &str) -> LuaMultiValue {
@@ -858,12 +914,141 @@ mod tests {
 
     // --- Brew ---
 
+    /// Records every command it is asked to run and replays canned exit codes.
+    #[derive(Default)]
+    struct FakeRunner {
+        missing_bins: Vec<&'static str>,
+        exit_codes: RefCell<VecDeque<i32>>,
+        calls: RefCell<Vec<String>>,
+    }
+
+    impl FakeRunner {
+        fn new(exit_codes: &[i32]) -> Self {
+            Self {
+                exit_codes: RefCell::new(exit_codes.iter().copied().collect()),
+                ..Default::default()
+            }
+        }
+
+        fn without_bin(bin: &'static str) -> Self {
+            Self {
+                missing_bins: vec![bin],
+                ..Default::default()
+            }
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.borrow().clone()
+        }
+    }
+
+    impl CommandRunner for FakeRunner {
+        fn has_bin(&self, bin: &str) -> bool {
+            !self.missing_bins.contains(&bin)
+        }
+
+        fn run(&self, cmd: &str, args: &[&str]) -> Result<(String, i32)> {
+            self.run_with_envs(cmd, args, &[])
+        }
+
+        fn run_with_envs(
+            &self,
+            cmd: &str,
+            args: &[&str],
+            _envs: &[(&str, &str)],
+        ) -> Result<(String, i32)> {
+            self.calls
+                .borrow_mut()
+                .push(format!("{cmd} {}", args.join(" ")));
+            let exit_code = self.exit_codes.borrow_mut().pop_front().unwrap_or(0);
+            Ok((format!("output of {cmd}"), exit_code))
+        }
+    }
+
+    #[test]
+    fn test_system_runner_shells_out_for_real() {
+        let runner = SystemRunner;
+
+        assert!(runner.has_bin("sh"));
+        assert!(!runner.has_bin("frork-does-not-exist"));
+
+        let (stdout, exit_code) = runner.run("echo", &["hello"]).unwrap();
+        assert_eq!(stdout.trim(), "hello");
+        assert_eq!(exit_code, 0);
+
+        let (stdout, exit_code) = runner
+            .run_with_envs("sh", &["-c", "echo $RUNNER_VAR"], &[("RUNNER_VAR", "set")])
+            .unwrap();
+        assert_eq!(stdout.trim(), "set");
+        assert_eq!(exit_code, 0);
+    }
+
+    #[test]
+    fn test_command_runner_require_bin() {
+        let runner = FakeRunner::without_bin("brew");
+
+        assert!(runner.require_bin("git").is_ok());
+        let error = runner.require_bin("brew").unwrap_err();
+        assert!(error.to_string().contains("not found in PATH"));
+    }
+
+    // --- Brew ---
+
     #[test]
     fn test_brew_display_and_from_lua() {
         let lua = Lua::new();
         let brew = Brew::from_lua_multi(LuaMultiValue::new(), &lua).unwrap();
 
         assert_eq!(brew.to_string(), "brew");
+    }
+
+    #[test]
+    fn test_brew_status_without_brew_installed() {
+        let brew = Brew {
+            runner: FakeRunner::without_bin("brew"),
+        };
+
+        assert!(matches!(brew.status().unwrap(), Status::Missing));
+        assert!(brew.runner.calls().is_empty());
+    }
+
+    #[test]
+    fn test_brew_status_reflects_version_exit_code() {
+        let brew = Brew {
+            runner: FakeRunner::new(&[0]),
+        };
+        assert!(matches!(brew.status().unwrap(), Status::Ok));
+        assert_eq!(brew.runner.calls(), ["brew --version"]);
+
+        // Present on PATH but not runnable.
+        let brew = Brew {
+            runner: FakeRunner::new(&[1]),
+        };
+        assert!(matches!(brew.status().unwrap(), Status::Missing));
+    }
+
+    #[test]
+    fn test_brew_install() {
+        let brew = Brew {
+            runner: FakeRunner::new(&[0]),
+        };
+        brew.install().unwrap();
+        assert!(brew.runner.calls()[0].contains("install.sh"));
+
+        let brew = Brew {
+            runner: FakeRunner::new(&[1]),
+        };
+        let error = brew.install().unwrap_err();
+        assert!(error.to_string().contains("Failed to install Homebrew"));
+    }
+
+    // --- BrewBundle ---
+
+    fn brew_bundle(runner: FakeRunner) -> BrewBundle<FakeRunner> {
+        BrewBundle {
+            brewfile: ExpandedPath::try_from("/tmp/Brewfile").unwrap(),
+            runner,
+        }
     }
 
     #[test]
@@ -874,6 +1059,65 @@ mod tests {
 
         assert_eq!(bundle.to_string(), "brew-bundle /tmp/Brewfile");
         assert_eq!(bundle.brewfile.as_str(), "/tmp/Brewfile");
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn test_brew_bundle_is_macos_only() {
+        let bundle = brew_bundle(FakeRunner::default());
+
+        assert!(bundle.status().is_err());
+        assert!(bundle.install().is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_brew_bundle_status_requires_brew() {
+        let bundle = brew_bundle(FakeRunner::without_bin("brew"));
+
+        assert!(bundle.status().unwrap_err().to_string().contains("brew"));
+        assert!(bundle.install().unwrap_err().to_string().contains("brew"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_brew_bundle_status_branches() {
+        // First check fails: packages are missing outright.
+        let bundle = brew_bundle(FakeRunner::new(&[1]));
+        assert!(matches!(bundle.status().unwrap(), Status::Missing));
+
+        // First check passes, second fails: installed but out of date.
+        let bundle = brew_bundle(FakeRunner::new(&[0, 1]));
+        let Status::ConflictUpgrade(conflict) = bundle.status().unwrap() else {
+            panic!("expected a conflict when packages need upgrading"); // cov-excl-line
+        };
+        assert_eq!(conflict.actual, "packages need upgrade");
+
+        // Both checks pass.
+        let bundle = brew_bundle(FakeRunner::new(&[0, 0]));
+        assert!(matches!(bundle.status().unwrap(), Status::Ok));
+        assert_eq!(
+            bundle.runner.calls(),
+            [
+                "brew bundle check --no-upgrade --file=/tmp/Brewfile",
+                "brew bundle check --file=/tmp/Brewfile",
+            ]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_brew_bundle_install() {
+        let bundle = brew_bundle(FakeRunner::new(&[0]));
+        bundle.install().unwrap();
+        assert_eq!(
+            bundle.runner.calls(),
+            ["brew bundle install --file=/tmp/Brewfile"]
+        );
+
+        let bundle = brew_bundle(FakeRunner::new(&[1]));
+        let error = bundle.install().unwrap_err();
+        assert!(error.to_string().contains("Failed to install brew bundle"));
     }
 
     // --- Debug ---
