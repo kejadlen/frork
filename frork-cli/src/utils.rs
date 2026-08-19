@@ -470,6 +470,39 @@ mod tests {
         assert!(error.to_string().contains("not found in PATH"));
     }
 
+    /// `uname -s`, lowercased — what `Utils::platform` is expected to report.
+    #[cfg(target_os = "macos")]
+    fn expected_platform() -> &'static str {
+        "darwin"
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn expected_platform() -> &'static str {
+        "linux"
+    }
+
+    #[test]
+    fn test_platform() {
+        assert_eq!(Utils::platform().unwrap(), expected_platform());
+    }
+
+    #[test]
+    fn test_sh_reports_minus_one_when_the_command_cannot_spawn() {
+        let lua = mlua::Lua::new();
+        let utils_table = Utils {}.into_lua(&lua).unwrap();
+        lua.globals().set("utils", utils_table).unwrap();
+
+        // A missing binary fails to spawn, which is distinct from running and
+        // exiting non-zero: `sh` reports nil and the -1 sentinel.
+        let (stdout, exit_code): (Option<String>, i32) = lua
+            .load(r#"return utils.sh("frork-does-not-exist")"#)
+            .eval()
+            .unwrap();
+
+        assert_eq!(stdout, None);
+        assert_eq!(exit_code, -1);
+    }
+
     #[test]
     fn test_utils_lua_bindings() {
         let lua = mlua::Lua::new();
@@ -498,7 +531,7 @@ mod tests {
         assert_eq!(chomped, "line");
 
         let platform: String = lua.load(r#"return utils.platform"#).eval().unwrap();
-        assert!(!platform.is_empty());
+        assert_eq!(platform, expected_platform());
 
         lua.load(r#"utils["assert-bin"]("sh")"#).exec().unwrap();
 

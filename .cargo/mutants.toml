@@ -1,2 +1,16 @@
 # Excludes for cargo-mutants — equivalent or unreachable mutations.
 # Add entries as false positives are discovered.
+
+exclude_re = [
+    # Unimplemented stubs. Nothing calls upgrade or remove yet, so replacing
+    # the todo!() with Ok(()) cannot be observed. Drop these when either is
+    # implemented — the same point the cov-excl markers in assertions.rs go.
+    "AssertionType::upgrade",
+    "AssertionType::remove",
+
+    # BrewBundle's status and install exist twice, split on
+    # #[cfg(target_os = "macos")]. cargo-mutants cannot tell which half is
+    # compiled, so it always reports the inactive one as missed.
+    "impl AssertionType for BrewBundle<R>>::status",
+    "impl AssertionType for BrewBundle<R>>::install",
+]
