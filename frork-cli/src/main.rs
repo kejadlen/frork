@@ -4,6 +4,7 @@ use clap::Subcommand;
 use clap_complete::Shell;
 use frork_cli::assertions::AssertionType;
 use frork_cli::assertions::Status;
+use frork_cli::report;
 use frork_cli::runtime::run_code;
 use frork_cli::runtime::run_script;
 use miette::IntoDiagnostic as _;
@@ -64,53 +65,48 @@ fn run(command: &Commands) -> Result<()> {
 }
 
 fn status(status: &Status, assertion: &dyn AssertionType) -> Result<()> {
+    print_lines(&report::render(status, assertion));
+    Ok(())
+}
+
+fn satisfy(status: &Status, assertion: &dyn AssertionType) -> Result<()> {
+    print_lines(&report::render(status, assertion));
+
     match status {
-        Status::Ok => println!("ok: {}", assertion),
-        Status::Missing => println!("missing: {}", assertion),
-        // TODO: show a nicer diff?
-        Status::ConflictUpgrade(conflict) => {
-            println!("conflict (upgradable): {}", assertion);
-            println!("  expected: {}", conflict.expected);
-            println!("    actual: {}", conflict.actual);
+        Status::Ok => {}
+        Status::Missing => {
+            assertion.install()?;
+            println!("ok: {assertion}");
+        }
+        Status::ConflictUpgrade(_) => {
+            if report::wants_upgrade(&prompt("Upgrade? [y/N]: ")?) {
+                assertion.upgrade()?;
+                println!("ok: {assertion}");
+            } else {
+                println!("skipped: {assertion}");
+            }
         }
     }
     Ok(())
 }
 
-fn satisfy(status: &Status, assertion: &dyn AssertionType) -> Result<()> {
-    match status {
-        Status::Ok => println!("ok: {}", assertion),
-        Status::Missing => {
-            println!("missing: {}", assertion);
-            assertion.install()?;
-            println!("ok: {}", assertion);
-        }
-        Status::ConflictUpgrade(conflict) => {
-            println!("conflict (upgradable): {}", assertion);
-            println!("  expected: {}", conflict.expected);
-            println!("    actual: {}", conflict.actual);
-
-            use std::io::Write as _;
-            print!("Upgrade? [y/N]: ");
-            std::io::stdout()
-                .flush()
-                .map_err(|e| miette!("Failed to flush stdout: {e}"))?;
-
-            let mut input = String::new();
-            std::io::stdin()
-                .read_line(&mut input)
-                .map_err(|e| miette!("Failed to read input: {e}"))?;
-
-            match input.trim().to_lowercase().as_str() {
-                "y" | "yes" => {
-                    assertion.upgrade()?;
-                    println!("ok: {}", assertion);
-                }
-                _ => {
-                    println!("skipped: {}", assertion);
-                }
-            }
-        }
+fn print_lines(lines: &[String]) {
+    for line in lines {
+        println!("{line}");
     }
-    Ok(())
+}
+
+fn prompt(question: &str) -> Result<String> {
+    use std::io::Write as _;
+
+    print!("{question}");
+    std::io::stdout()
+        .flush()
+        .map_err(|e| miette!("Failed to flush stdout: {e}"))?;
+
+    let mut input = String::new();
+    std::io::stdin()
+        .read_line(&mut input)
+        .map_err(|e| miette!("Failed to read input: {e}"))?;
+    Ok(input)
 }

@@ -14,5 +14,6 @@
 pub mod assertions;
 pub mod error;
 pub mod registry;
+pub mod report;
 pub mod runtime;
 pub mod utils;

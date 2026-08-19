@@ -14,3 +14,10 @@ exclude_re = [
     "impl AssertionType for BrewBundle<R>>::status",
     "impl AssertionType for BrewBundle<R>>::install",
 ]
+
+# main.rs is I/O only — argument parsing, println!, and the stdin prompt.
+# "Function does nothing" cannot be caught there without capturing stdout, so
+# it is excluded here the same way bin/coverage ignores it. Anything with a
+# decision in it belongs in a library module instead; report.rs holds the
+# wording and the prompt parsing for exactly this reason.
+exclude_globs = ["frork-cli/src/main.rs"]
