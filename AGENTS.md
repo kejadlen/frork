@@ -30,10 +30,12 @@ frork-cli/
   build.rs                 # Sets FRORK_VERSION
   fennel-1.6.0.lua         # Vendored Fennel compiler
   src/
-    main.rs                # Entrypoint, clap CLI, Lua/Fennel setup, Frork runtime
+    main.rs                # Entrypoint — clap CLI and status rendering only
     lib.rs                 # Library root — re-exports modules
     assertions.rs          # Assertion types and the AssertionType trait
     error.rs               # thiserror + miette::Diagnostic enum (FrorkError)
+    registry.rs            # Assertion type name to factory dispatch
+    runtime.rs             # Lua/Fennel setup, the frork module, run_code/run_script
     utils.rs               # Shell helpers, path expansion, Lua bindings
   tests/
     cli.rs                 # Integration tests via assert_cmd
@@ -67,6 +69,7 @@ just install                # cargo install --locked --path frork-cli
 ## Conventions
 
 - Rust edition 2024, resolver v3 workspace.
+- All domain logic lives in the library; `main.rs` parses arguments and renders status, and depends on the library rather than re-declaring its modules. Anything added to the binary is neither covered nor mutation-tested, so put logic in a library module.
 - Error handling: `miette` in the binary, `thiserror` in library code. Library errors derive `miette::Diagnostic`.
 - Logging uses `tracing` with `tracing-subscriber`. Use `tracing::info`, `tracing::debug`, etc. — not `println!` for diagnostic output.
 - Lua integration via `mlua` with vendored Lua 5.4. The Fennel compiler is vendored as a Lua source file.
@@ -125,11 +128,11 @@ Built-in assertion types:
 
 `Brew` and `BrewBundle` reach the shell through a `CommandRunner` generic that defaults to `SystemRunner`, so tests substitute a fake instead of running Homebrew. The default type parameter keeps `TypedFactory::<Brew>::new()` and every Fennel script unchanged. `Git` deliberately does not use the seam — its tests run real `git` against a local bare repo, which is offline and tests the actual invocations.
 
-The `Registry` struct dispatches assertion types. It checks Lua-registered types first, then falls back to built-in types. Each built-in type is created through a `TypedFactory<T>` that handles Lua argument conversion via `FromLuaMulti`.
+The `Registry` struct in `registry.rs` dispatches assertion types. It checks Lua-registered types first, then falls back to built-in types. Each built-in type is created through a `TypedFactory<T>` that handles Lua argument conversion via `FromLuaMulti`.
 
 ### Lua/Fennel bridge
 
-`setup_lua` creates a Lua VM, loads the Fennel compiler, and registers a `frork` module with:
+`runtime.rs` holds everything that touches Lua. `setup_lua` creates a Lua VM, loads the Fennel compiler, and registers a `frork` module with:
 
 - `frork.ok(type, ...)` — assert that a condition holds (dispatches through the registry)
 - `frork.register(name, {status=fn, install=fn})` — register a custom assertion type from Fennel
