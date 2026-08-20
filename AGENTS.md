@@ -35,6 +35,7 @@ frork-cli/
     assertions.rs          # Assertion types and the AssertionType trait
     error.rs               # thiserror + miette::Diagnostic enum (FrorkError)
     registry.rs            # Assertion type name to factory dispatch
+    report.rs              # Status wording and upgrade-prompt parsing
     runtime.rs             # Lua/Fennel setup, the frork module, run_code/run_script
     utils.rs               # Shell helpers, path expansion, Lua bindings
   tests/
@@ -69,7 +70,8 @@ just install                # cargo install --locked --path frork-cli
 ## Conventions
 
 - Rust edition 2024, resolver v3 workspace.
-- All domain logic lives in the library; `main.rs` parses arguments and renders status, and depends on the library rather than re-declaring its modules. Anything added to the binary is neither covered nor mutation-tested, so put logic in a library module.
+- All domain logic lives in the library; `main.rs` parses arguments and performs I/O, and depends on the library rather than re-declaring its modules. `bin/coverage` ignores it and `.cargo/mutants.toml` excludes it, so anything with a decision in it goes in a library module — `report.rs` holds the status wording and the upgrade-prompt parsing for exactly that reason.
+- `just mutants` passes with zero survivors. Treat a new survivor as a missing assertion, not a reason to widen the exclusions.
 - Error handling: `miette` in the binary, `thiserror` in library code. Library errors derive `miette::Diagnostic`.
 - Logging uses `tracing` with `tracing-subscriber`. Use `tracing::info`, `tracing::debug`, etc. — not `println!` for diagnostic output.
 - Lua integration via `mlua` with vendored Lua 5.4. The Fennel compiler is vendored as a Lua source file.
