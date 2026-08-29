@@ -550,6 +550,7 @@ pub struct LuaAssertionType {
     pub display_fn: Option<LuaFunction>,
     pub status_fn: LuaFunction,
     pub install_fn: LuaFunction,
+    pub upgrade_fn: Option<LuaFunction>,
 }
 
 impl FromLua for LuaAssertionType {
@@ -559,11 +560,13 @@ impl FromLua for LuaAssertionType {
         let display_fn: Option<LuaFunction> = table.get("display").ok();
         let status_fn: LuaFunction = table.get("status")?;
         let install_fn: LuaFunction = table.get("install")?;
+        let upgrade_fn: Option<LuaFunction> = table.get("upgrade").ok();
 
         Ok(Self {
             display_fn,
             status_fn,
             install_fn,
+            upgrade_fn,
         })
     }
 }
@@ -629,11 +632,19 @@ impl AssertionType for LuaAssertion {
         Ok(())
     }
 
-    // cov-excl-start
     fn upgrade(&self) -> Result<()> {
-        todo!()
+        // A missing upgrade function falls back to install — re-running the
+        // install is the default way to bring a conflicted assertion in line.
+        if let Some(upgrade_fn) = self.assertion_type.upgrade_fn.as_ref() {
+            upgrade_fn
+                .call::<()>(self.args.clone())
+                .map_err(FrorkError::from)?;
+        } else {
+            self.install()?;
+        }
+        debug!("upgraded: {}", self);
+        Ok(())
     }
-    // cov-excl-stop
 }
 
 #[cfg(test)]
@@ -1231,6 +1242,7 @@ mod tests {
         )
         .unwrap();
         assert!(assertion_type.display_fn.is_none());
+        assert!(assertion_type.upgrade_fn.is_none());
 
         assert!(lua_assertion_type(&lua, r#"return {install = function() end}"#).is_err());
     }
@@ -1274,6 +1286,62 @@ mod tests {
         let assertion = LuaAssertion::new("custom", LuaMultiValue::new(), assertion_type);
         assert!(assertion.status().is_err());
         assert!(assertion.install().is_err());
+    }
+
+    #[test]
+    fn test_lua_assertion_upgrade_fn_wins_over_install() {
+        let lua = Lua::new();
+        let assertion_type = lua_assertion_type(
+            &lua,
+            r#"return {
+                status = function() return "ok" end,
+                install = function(a) _G.ran = "install:" .. a end,
+                upgrade = function(a) _G.ran = "upgrade:" .. a end,
+            }"#,
+        )
+        .unwrap();
+
+        let assertion = LuaAssertion::new("custom", multi(&lua, r#"return "arg""#), assertion_type);
+        assertion.upgrade().unwrap();
+
+        let ran: String = lua.globals().get("ran").unwrap();
+        assert_eq!(ran, "upgrade:arg");
+    }
+
+    #[test]
+    fn test_lua_assertion_upgrade_falls_back_to_install() {
+        let lua = Lua::new();
+        let assertion_type = lua_assertion_type(
+            &lua,
+            r#"return {
+                status = function() return "ok" end,
+                install = function() _G.ran = "install" end,
+            }"#,
+        )
+        .unwrap();
+
+        let assertion = LuaAssertion::new("custom", LuaMultiValue::new(), assertion_type);
+        assertion.upgrade().unwrap();
+
+        let ran: String = lua.globals().get("ran").unwrap();
+        assert_eq!(ran, "install");
+    }
+
+    #[test]
+    fn test_lua_assertion_upgrade_propagates_failures() {
+        let lua = Lua::new();
+        let assertion_type = lua_assertion_type(
+            &lua,
+            r#"return {
+                status = function() return "ok" end,
+                install = function() end,
+                upgrade = function() error("upgrade boom") end,
+            }"#,
+        )
+        .unwrap();
+
+        let assertion = LuaAssertion::new("custom", LuaMultiValue::new(), assertion_type);
+        assert!(assertion.upgrade().is_err());
     }
 
     #[test]

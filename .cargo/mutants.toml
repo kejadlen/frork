@@ -12,7 +12,6 @@ exclude_re = [
     "impl AssertionType for Brew<R>>::upgrade",
     "impl AssertionType for BrewBundle<R>>::upgrade",
     "impl AssertionType for Debug>::upgrade",
-    "impl AssertionType for LuaAssertion>::upgrade",
     "AssertionType::remove",
 
     # BrewBundle's status and install exist twice, split on

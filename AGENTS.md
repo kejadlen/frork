@@ -137,7 +137,7 @@ The `Registry` struct in `registry.rs` dispatches assertion types. It checks Lua
 `runtime.rs` holds everything that touches Lua. `setup_lua` creates a Lua VM, loads the Fennel compiler, and registers a `frork` module with:
 
 - `frork.ok(type, ...)` — assert that a condition holds (dispatches through the registry)
-- `frork.register(name, {status=fn, install=fn})` — register a custom assertion type from Fennel
+- `frork.register(name, {status=fn, install=fn, upgrade=fn})` — register a custom assertion type from Fennel
 - `frork.utils` — utility functions exposed to Lua/Fennel scripts
 
 ### Utils module
@@ -156,7 +156,7 @@ On the Rust side, `ExpandedPath` handles `~` and `$ENV_VAR` expansion at the Lua
 
 ### Custom assertions
 
-Fennel scripts can register new assertion types via `frork.register(name, {status=fn, install=fn, display=fn})`. These become `LuaAssertionType` values dispatched through the same `AssertionType` trait. The optional `display` function controls how the assertion is printed.
+Fennel scripts can register new assertion types via `frork.register(name, {status=fn, install=fn, upgrade=fn, display=fn})`. These become `LuaAssertionType` values dispatched through the same `AssertionType` trait. The optional `upgrade` function handles a `conflict-upgrade` status when the user answers the upgrade prompt; when absent, upgrading falls back to `install`. The optional `display` function controls how the assertion is printed.
 
 ### frork-lua vs frork-cli
 
