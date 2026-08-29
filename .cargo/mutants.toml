@@ -2,10 +2,17 @@
 # Add entries as false positives are discovered.
 
 exclude_re = [
-    # Unimplemented stubs. Nothing calls upgrade or remove yet, so replacing
-    # the todo!() with Ok(()) cannot be observed. Drop these when either is
-    # implemented — the same point the cov-excl markers in assertions.rs go.
-    "AssertionType::upgrade",
+    # Unimplemented upgrade stubs — nothing calls them in tests, so replacing
+    # the todo!() with Ok(()) cannot be observed. Drop an entry when that
+    # type's upgrade is implemented, at the same point its cov-excl markers
+    # in assertions.rs go. remove still defaults on the trait.
+    "impl AssertionType for Symlink>::upgrade",
+    "impl AssertionType for Directory>::upgrade",
+    "impl AssertionType for Git>::upgrade",
+    "impl AssertionType for Brew<R>>::upgrade",
+    "impl AssertionType for BrewBundle<R>>::upgrade",
+    "impl AssertionType for Debug>::upgrade",
+    "impl AssertionType for LuaAssertion>::upgrade",
     "AssertionType::remove",
 
     # BrewBundle's status and install exist twice, split on

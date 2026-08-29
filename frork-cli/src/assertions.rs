@@ -16,16 +16,10 @@ use crate::utils::Utils;
 pub trait AssertionType: std::fmt::Display {
     fn status(&self) -> Result<Status>;
     fn install(&self) -> Result<()>;
-
-    // Neither is implemented for any assertion type yet. They default here so
-    // the stubs live in one place rather than being repeated per impl. Delete
-    // the markers below along with the todo! when implementing either.
-    // cov-excl-start
-    fn upgrade(&self) -> Result<()> {
-        todo!()
-    }
+    fn upgrade(&self) -> Result<()>;
 
     // Not yet called — will be used when `frork remove` is implemented.
+    // cov-excl-start
     #[allow(dead_code)]
     fn remove(&self) -> Result<()> {
         todo!()
@@ -165,6 +159,12 @@ impl AssertionType for Symlink {
         debug!("created: {}", self);
         Ok(())
     }
+
+    // cov-excl-start
+    fn upgrade(&self) -> Result<()> {
+        todo!()
+    }
+    // cov-excl-stop
 }
 
 pub struct Directory {
@@ -201,6 +201,12 @@ impl AssertionType for Directory {
         debug!("created: {}", self);
         Ok(())
     }
+
+    // cov-excl-start
+    fn upgrade(&self) -> Result<()> {
+        todo!()
+    }
+    // cov-excl-stop
 }
 
 pub struct Git {
@@ -283,6 +289,12 @@ impl AssertionType for Git {
         debug!("created: {}", self);
         Ok(())
     }
+
+    // cov-excl-start
+    fn upgrade(&self) -> Result<()> {
+        todo!()
+    }
+    // cov-excl-stop
 }
 
 /// A seam over shelling out, so assertion types can be exercised without
@@ -378,6 +390,12 @@ impl<R: CommandRunner> AssertionType for Brew<R> {
         debug!("installed: {}", self);
         Ok(())
     }
+
+    // cov-excl-start
+    fn upgrade(&self) -> Result<()> {
+        todo!()
+    }
+    // cov-excl-stop
 }
 
 pub struct BrewBundle<R = SystemRunner> {
@@ -463,6 +481,12 @@ impl<R: CommandRunner> AssertionType for BrewBundle<R> {
         debug!("installed: {}", self);
         Ok(())
     }
+
+    // cov-excl-start
+    fn upgrade(&self) -> Result<()> {
+        todo!()
+    }
+    // cov-excl-stop
 }
 
 pub struct Debug {
@@ -511,6 +535,12 @@ impl AssertionType for Debug {
             .map_err(|e| miette!("Debug install function failed: {e}"))?;
         Ok(())
     }
+
+    // cov-excl-start
+    fn upgrade(&self) -> Result<()> {
+        todo!()
+    }
+    // cov-excl-stop
 }
 
 // --- Lua custom assertion types ---
@@ -598,6 +628,12 @@ impl AssertionType for LuaAssertion {
         debug!("installed: {}", self);
         Ok(())
     }
+
+    // cov-excl-start
+    fn upgrade(&self) -> Result<()> {
+        todo!()
+    }
+    // cov-excl-stop
 }
 
 #[cfg(test)]

@@ -90,7 +90,7 @@ Releases run on green main builds and attach a macOS aarch64 tarball plus a [Dot
 
 `bin/coverage` measures library line coverage with grcov and gates on `COVERAGE_THRESHOLD`, which defaults to 100. The library is at 100% — keep it there rather than lowering the gate.
 
-Unimplemented stubs are excluded rather than counted: the `--excl-line` pattern covers `todo!` alongside `unreachable!` and the explicit `cov-excl-line` marker. The default `upgrade` and `remove` methods on `AssertionType` sit inside a `cov-excl-start`/`cov-excl-stop` pair because a function signature carries its own counter that no line pattern can match.
+Unimplemented stubs are excluded rather than counted: the `--excl-line` pattern covers `todo!` alongside `unreachable!` and the explicit `cov-excl-line` marker. An unimplemented method sits inside a `cov-excl-start`/`cov-excl-stop` pair because a function signature carries its own counter that no line pattern can match — the per-impl `upgrade` stubs and the default `remove` on `AssertionType` all do this. A trailing `// cov-excl-line` on the signature won't work either: rustfmt moves it to its own line inside the body.
 
 Coverage regions land on their own line in two cases worth knowing, since both look like untestable code and are neither:
 
