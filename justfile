@@ -9,6 +9,9 @@ check:
 
 clippy:
     cargo clippy -p frork-cli --all-targets -- -D warnings
+    # frork-lib and frork (frork-lua) can be linted together — neither pulls
+    # in mlua's vendored feature, which conflicts with frork-cli's.
+    cargo clippy -p frork-lib -p frork -- -D warnings
 
 coverage:
     ./bin/coverage

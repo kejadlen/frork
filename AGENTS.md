@@ -53,7 +53,7 @@ frork-lua/
 ```sh
 cargo check -p frork-cli    # Type-check the CLI (workspace has mlua feature conflict)
 cargo fmt --all             # Format all code
-cargo clippy -p frork-cli   # Lint
+cargo clippy -p frork-cli   # Lint the CLI; `just clippy` also lints frork-lib and frork-lua
 cargo test -p frork-cli     # Run tests
 ```
 
@@ -77,7 +77,7 @@ just install                # cargo install --locked --path frork-cli
 - Lua integration via `mlua` with vendored Lua 5.4. The Fennel compiler is vendored as a Lua source file.
 - Filesystem operations use `fs-err` instead of `std::fs`. The `.clippy.toml` disallows bare `std::fs` types and methods so this is enforced at lint time.
 - `.clippy.toml` also bans `Iterator::for_each` and `try_for_each` — use `for` loops for side effects, and `String::from_utf8_lossy`, which silently corrupts non-UTF-8 bytes from the OS.
-- `[lints.clippy]` in `frork-cli/Cargo.toml` warns on `unwrap`, `expect`, `panic!`, slice indexing, and unchecked arithmetic. Opt out per call site with `#[allow(...)]` and a comment explaining why the invariant holds. Test code is exempt via `#![cfg_attr(test, allow(...))]`.
+- `[workspace.lints.clippy]` in the root `Cargo.toml` warns on `unwrap`, `expect`, `panic!`, slice indexing, and unchecked arithmetic; every member crate opts in via `[lints] workspace = true`. Opt out per call site with `#[allow(...)]` and a comment explaining why the invariant holds. Test code is exempt via `#![cfg_attr(test, allow(...))]`.
 - All CI checks must pass: `cargo fmt --all --check`, `cargo clippy`, `cargo test`.
 
 ## Versioning and release
