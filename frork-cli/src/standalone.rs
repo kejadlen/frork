@@ -40,3 +40,50 @@ pub fn embed(runtime: Vec<u8>, lua_code: &str) -> Result<Vec<u8>> {
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A minimal arm64 Mach-O executable, from libsui's own test fixtures.
+    const MACHO: &[u8] = include_bytes!("../tests/fixtures/exec_mach64");
+
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    #[test]
+    fn test_a_plain_executable_has_no_embedded_script() {
+        assert_eq!(embedded_script().unwrap(), None);
+    }
+
+    #[test]
+    fn test_embed_into_elf() {
+        let exe = fs_err::read(std::env::current_exe().unwrap()).unwrap();
+
+        let out = embed(exe, "print('elf')").unwrap();
+
+        assert!(libsui::utils::is_elf(&out));
+        assert!(contains(&out, b"print('elf')"));
+    }
+
+    #[test]
+    fn test_embed_into_macho() {
+        let out = embed(MACHO.to_vec(), "print('macho')").unwrap();
+
+        assert!(libsui::utils::is_macho(&out));
+        assert!(contains(&out, b"print('macho')"));
+    }
+
+    #[test]
+    fn test_embed_rejects_a_truncated_macho() {
+        let truncated = MACHO.get(..64).unwrap().to_vec();
+
+        assert!(embed(truncated, "").is_err());
+    }
+
+    #[test]
+    fn test_embed_rejects_other_formats() {
+        assert!(embed(b"#!/bin/sh".to_vec(), "").is_err());
+    }
+}

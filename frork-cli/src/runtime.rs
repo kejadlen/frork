@@ -149,18 +149,12 @@ pub fn compile_script(script: &str) -> Result<String> {
             .set(k, v)
             .map_err(|e| miette!("Failed to set option {k}: {e}"))
     };
-    set(
-        "filename",
-        script.into_lua(&lua).map_err(|e| miette!("{e}"))?,
-    )?;
+    let filename = script.into_lua(&lua).map_err(|e| miette!("{e}"))?;
+    set("filename", filename)?;
     set("requireAsInclude", LuaValue::Boolean(true))?;
-    set(
-        "skipInclude",
-        LuaValue::Table(
-            lua.create_sequence_from(["frork", "fennel"])
-                .map_err(|e| miette!("{e}"))?,
-        ),
-    )?;
+    let skip = lua.create_sequence_from(["frork", "fennel"]);
+    let skip = skip.map_err(|e| miette!("{e}"))?;
+    set("skipInclude", LuaValue::Table(skip))?;
 
     let compile: LuaFunction = fennel_module
         .get("compileString")
