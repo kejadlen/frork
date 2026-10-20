@@ -90,13 +90,15 @@ jobs:
           ref: ${{ env.RELEASE_SHA }}
           persist-credentials: false
 
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.17.0
+
       # The SDKs `frork compile` downloads to link a script for each target.
       - name: Build SDKs
         run: |
           # shellcheck disable=SC2086 # TARGETS is a word list
           rustup target add $TARGETS && rustup component add llvm-tools
-          pip install ziglang
-          export PATH="$PATH:$(python3 -c 'import ziglang, os; print(os.path.dirname(ziglang.__file__))')"
           curl -sSfL "https://www.lua.org/ftp/lua-${LUA_VERSION}.tar.gz" | tar xz
           export LUA_SRC="$PWD/lua-${LUA_VERSION}/src"
           for target in $TARGETS; do

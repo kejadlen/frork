@@ -111,11 +111,10 @@ fn run(command: &Commands) -> Result<()> {
 }
 
 fn sdk_cache() -> Result<std::path::PathBuf> {
-    let cache = std::env::var_os("XDG_CACHE_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::home_dir().map(|home| home.join(".cache")))
-        .ok_or_else(|| miette!("No cache directory: set XDG_CACHE_HOME or HOME"))?;
-    Ok(cache.join("frork").join("sdk"))
+    xdg::BaseDirectories::with_prefix("frork")
+        .get_cache_home()
+        .map(|cache| cache.join("sdk"))
+        .ok_or_else(|| miette!("No cache directory: set XDG_CACHE_HOME or HOME"))
 }
 
 fn status(status: &Status, assertion: &dyn AssertionType) -> Result<()> {

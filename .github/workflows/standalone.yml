@@ -21,11 +21,12 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup target add aarch64-apple-darwin && rustup component add llvm-tools
-      - run: pip install ziglang
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.17.0
       - run: curl -sSfL "https://www.lua.org/ftp/lua-${LUA_VERSION}.tar.gz" | tar xz
       - name: Build SDKs and compile the example with frork
         run: |
-          export PATH="$PATH:$(python3 -c 'import ziglang, os; print(os.path.dirname(ziglang.__file__))')"
           export LUA_SRC="$PWD/lua-${LUA_VERSION}/src"
           cargo build -p frork-cli
           mkdir dist

@@ -24,6 +24,7 @@ serde = { version = "*", features = ["derive"] }
 thiserror = "*"
 tracing = "*"
 tracing-subscriber = { version = "*", features = ["env-filter"] }
+xdg = "*"
 
 [dev-dependencies]
 assert_cmd = "*"
