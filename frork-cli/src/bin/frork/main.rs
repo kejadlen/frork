@@ -5,8 +5,11 @@ use clap_complete::Shell;
 use frork_cli::assertions::AssertionType;
 use frork_cli::assertions::Status;
 use frork_cli::report;
+use frork_cli::runtime::compile_script;
 use frork_cli::runtime::run_code;
+use frork_cli::runtime::run_compiled;
 use frork_cli::runtime::run_script;
+use frork_cli::standalone;
 use miette::IntoDiagnostic as _;
 use miette::Result;
 use miette::miette;
@@ -31,10 +34,37 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Check { code: String },
-    Do { code: String },
-    Status { script: String },
-    Satisfy { script: String },
+    Check {
+        code: String,
+    },
+    Do {
+        code: String,
+    },
+    Status {
+        script: String,
+    },
+    Satisfy {
+        script: String,
+    },
+    /// Compile a script into a standalone executable.
+    Build {
+        script: String,
+        #[arg(short, long)]
+        output: String,
+        /// A frork executable for the target platform to embed the script
+        /// in. Defaults to this one.
+        #[arg(long)]
+        runtime: Option<String>,
+    },
+}
+
+/// What a standalone binary accepts in place of the usual CLI.
+#[derive(Parser)]
+#[command(version = VERSION)]
+struct Standalone {
+    /// Install missing assertions instead of only reporting them.
+    #[arg(long)]
+    satisfy: bool,
 }
 
 fn main() -> Result<()> {
@@ -45,6 +75,15 @@ fn main() -> Result<()> {
         .with(fmt::layer())
         .with(EnvFilter::from_default_env())
         .init();
+
+    if let Some(code) = standalone::embedded_script()? {
+        let args = Standalone::parse();
+        return if args.satisfy {
+            run_compiled(&code, satisfy)
+        } else {
+            run_compiled(&code, status)
+        };
+    }
 
     let cli = Cli::parse();
 
@@ -67,7 +106,27 @@ fn run(command: &Commands) -> Result<()> {
         Commands::Do { code } => run_code(code, satisfy),
         Commands::Status { script } => run_script(script, status),
         Commands::Satisfy { script } => run_script(script, satisfy),
+        Commands::Build {
+            script,
+            output,
+            runtime,
+        } => build(script, output, runtime.as_deref()),
     }
+}
+
+fn build(script: &str, output: &str, runtime: Option<&str>) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let lua_code = compile_script(script)?;
+    let runtime = match runtime {
+        Some(path) => path.into(),
+        None => std::env::current_exe().into_diagnostic()?,
+    };
+    let exe = standalone::embed(fs_err::read(runtime).into_diagnostic()?, &lua_code)?;
+    fs_err::write(output, exe).into_diagnostic()?;
+    fs_err::set_permissions(output, std::fs::Permissions::from_mode(0o755)).into_diagnostic()?;
+    println!("built {output}");
+    Ok(())
 }
 
 fn status(status: &Status, assertion: &dyn AssertionType) -> Result<()> {

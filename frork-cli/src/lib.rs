@@ -16,4 +16,5 @@ pub mod error;
 pub mod registry;
 pub mod report;
 pub mod runtime;
+pub mod standalone;
 pub mod utils;

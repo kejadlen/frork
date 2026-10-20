@@ -19,6 +19,7 @@ serde = { version = "*", features = ["derive"] }
 thiserror = "*"
 tracing = "*"
 tracing-subscriber = { version = "*", features = ["env-filter"] }
+libsui = "*"
 
 [dev-dependencies]
 assert_cmd = "*"

@@ -90,6 +90,86 @@ pub fn run_script(script: &str, handle_status: impl StatusHandler) -> Result<()>
     Ok(())
 }
 
+/// Evaluates Lua that `compile_script` produced from a Fennel script, as
+/// embedded in a standalone binary.
+pub fn run_compiled(lua_code: &str, handle_status: impl StatusHandler) -> Result<()> {
+    let (lua, _frork_module, _fennel_module) = setup_lua(handle_status)?;
+
+    // Anything not inlined at compile time (a dynamic require, say) still
+    // resolves through Fennel's searcher.
+    lua.load(r#"require("fennel").install()"#)
+        .exec()
+        .map_err(|e| miette!("Failed to install Fennel searcher: {e}"))?;
+
+    lua.load(lua_code)
+        .set_name("=embedded")
+        .exec()
+        .map_err(|e| miette!("Failed to execute embedded script: {e}"))?;
+
+    Ok(())
+}
+
+/// Compiles a `.fnl` script to Lua, inlining every module it requires from
+/// its directory so the result runs without the source tree. `frork` and
+/// `fennel` stay as runtime requires since the binary provides them.
+pub fn compile_script(script: &str) -> Result<String> {
+    let lua = Lua::new();
+    let fennel_module: LuaTable = lua
+        .load(include_str!("../fennel-1.6.0.lua"))
+        .set_name("=fennel")
+        .eval()
+        .map_err(|e| miette!("Failed to load Fennel: {e}"))?;
+    lua.register_module("fennel", &fennel_module)
+        .map_err(|e| miette!("Failed to register fennel module: {e}"))?;
+
+    let script_path = std::path::Path::new(script);
+    let script_dir = script_path
+        .parent()
+        .and_then(|d| d.to_str())
+        .filter(|d| !d.is_empty())
+        .unwrap_or(".");
+    for (key, suffix) in [("path", "fnl"), ("macro-path", "fnlm")] {
+        let current: String = fennel_module
+            .get(key)
+            .map_err(|e| miette!("Failed to get Fennel {key}: {e}"))?;
+        let local = format!(
+            "{script_dir}/?.{suffix};{script_dir}/?/init.{suffix};{script_dir}/?.fnl;{script_dir}/?/init-macros.fnl"
+        );
+        fennel_module
+            .set(key, format!("{local};{current}"))
+            .map_err(|e| miette!("Failed to set Fennel {key}: {e}"))?;
+    }
+
+    let source = fs_err::read_to_string(script_path).map_err(|e| miette!("{e}"))?;
+    let options = lua
+        .create_table()
+        .map_err(|e| miette!("Failed to create options: {e}"))?;
+    let set = |k: &str, v: LuaValue| {
+        options
+            .set(k, v)
+            .map_err(|e| miette!("Failed to set option {k}: {e}"))
+    };
+    set(
+        "filename",
+        script.into_lua(&lua).map_err(|e| miette!("{e}"))?,
+    )?;
+    set("requireAsInclude", LuaValue::Boolean(true))?;
+    set(
+        "skipInclude",
+        LuaValue::Table(
+            lua.create_sequence_from(["frork", "fennel"])
+                .map_err(|e| miette!("{e}"))?,
+        ),
+    )?;
+
+    let compile: LuaFunction = fennel_module
+        .get("compileString")
+        .map_err(|e| miette!("Failed to get fennel.compileString: {e}"))?;
+    compile
+        .call::<String>((source, options))
+        .map_err(|e| miette!("Failed to compile script: {e}"))
+}
+
 fn setup_lua(handle_status: impl StatusHandler) -> Result<(Lua, LuaTable, LuaTable)> {
     let lua = Lua::new();
 
