@@ -94,7 +94,7 @@ pub struct Utils;
 
 impl Utils {
     pub fn chomp(s: &str) -> String {
-        s.trim_end_matches('\n').trim_end_matches('\r').to_string()
+        s.trim_end_matches(['\n', '\r']).to_string()
     }
 
     pub fn dirname(path: &str) -> Result<Option<String>> {
