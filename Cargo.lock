@@ -321,6 +321,7 @@ dependencies = [
 name = "frork"
 version = "0.1.0"
 dependencies = [
+ "frork-cli",
  "mlua",
 ]
 

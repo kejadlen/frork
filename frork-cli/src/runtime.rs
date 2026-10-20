@@ -90,6 +90,16 @@ pub fn run_script(script: &str, handle_status: impl StatusHandler) -> Result<()>
     Ok(())
 }
 
+/// Builds the `frork` module table on an existing Lua state, for hosts that
+/// embed frork as a native module instead of using `setup_lua`.
+pub fn frork_module(lua: &Lua, handle_status: impl StatusHandler) -> LuaResult<LuaTable> {
+    match Frork::new(handle_status, lua.clone()).into_lua(lua)? {
+        LuaValue::Table(table) => Ok(table),
+        // Frork::into_lua always returns a table.
+        _ => unreachable!(),
+    }
+}
+
 fn setup_lua(handle_status: impl StatusHandler) -> Result<(Lua, LuaTable, LuaTable)> {
     let lua = Lua::new();
 
@@ -301,6 +311,18 @@ mod tests {
             handler,
         )
         .unwrap();
+
+        assert_eq!(seen.borrow().as_slice(), ["Ok: directory /tmp"]);
+    }
+
+    #[test]
+    fn test_frork_module_works_on_a_host_lua() {
+        let (seen, handler) = recorder();
+        let lua = Lua::new();
+
+        let frork = frork_module(&lua, handler).unwrap();
+        lua.globals().set("frork", frork).unwrap();
+        lua.load(r#"frork.ok("directory", "/tmp")"#).exec().unwrap();
 
         assert_eq!(seen.borrow().as_slice(), ["Ok: directory /tmp"]);
     }

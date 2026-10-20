@@ -82,17 +82,21 @@ $ frork check '(ok :directory "~/src")'
 $ frork do '(ok :directory "~/src")'
 ```
 
-## Design goal: compiled Fennel binaries
+## Standalone binaries
 
-A long-term goal is compiling Fennel scripts into standalone binaries —
-no Rust toolchain or frork CLI needed at runtime. The frork-lua crate
-exists to support this: it builds as a C dynamic library that exposes
-frork's assertion engine as a Lua module, which Fennel's
-`--compile-binary` could link against a static Lua library.
+`bin/compile-binary` compiles a script into a standalone executable with
+Fennel's own `--compile-binary`, linking the frork-lua crate in as a static
+native module. Any target other than the host is cross-compiled with zig,
+so one Linux machine can build for both Linux and macOS:
 
-This doesn't work yet, but the desire for it drives the split between
-frork-cli (embedded Lua, the primary interface) and frork-lua (cdylib,
-future compilation target).
+```
+FENNEL=path/to/fennel LUA_SRC=path/to/lua-5.4/src \
+  bin/compile-binary aarch64-apple-darwin examples/standalone/main.fnl demo
+FRORK_DEMO_ROOT=/tmp/demo ./demo --satisfy
+```
+
+The binary reports each assertion, and installs missing ones with
+`--satisfy`. Modules and macros next to the script are compiled in.
 
 ## Development
 

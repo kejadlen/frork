@@ -1,18 +1,28 @@
+use frork_cli::assertions::AssertionType;
+use frork_cli::assertions::Status;
+use frork_cli::report;
+use frork_cli::runtime::frork_module;
 use mlua::prelude::*;
 
-// This crate builds a cdylib that can be loaded as a Lua module via
-// `require("frork")`. The goal is to expose frork's assertion engine
-// so Fennel's `--compile-binary` can produce standalone binaries
-// without the Rust toolchain at runtime.
-//
-// The assertion engine currently lives in frork-cli. Once it moves
-// to frork-lib, this module will re-export it to Lua.
+// The frork engine as a Lua module, `require("frork")`. Linked statically
+// into a binary from `fennel --compile-binary --native-module`, it turns a
+// Fennel script into a standalone executable: `--satisfy` installs missing
+// assertions, otherwise they are only reported.
 
 #[mlua::lua_module]
 fn frork(lua: &Lua) -> LuaResult<LuaTable> {
-    let exports = lua.create_table()?;
-
+    let satisfy = std::env::args().any(|arg| arg == "--satisfy");
+    let handler = move |status: &Status, assertion: &dyn AssertionType| {
+        for line in report::render(status, assertion) {
+            println!("{line}");
+        }
+        if satisfy && matches!(status, Status::Missing) {
+            assertion.install()?;
+            println!("ok: {assertion}");
+        }
+        Ok(())
+    };
+    let exports = frork_module(lua, handler)?;
     exports.set("VERSION", env!("CARGO_PKG_VERSION"))?;
-
     Ok(exports)
 }

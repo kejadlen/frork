@@ -7,13 +7,18 @@ edition = "2024"
 name = "frork"
 path = "src/bin/frork/main.rs"
 
+[features]
+default = ["vendored"]
+# Off when frork-lua links the engine into a host Lua as a native module.
+vendored = ["mlua/vendored"]
+
 [dependencies]
 frork-lib = { path = "../frork-lib" }
 miette = { version = "*", features = ["fancy"] }
 fs-err = "*"
 clap = { version = "*", features = ["derive", "env"] }
 clap_complete = "*"
-mlua = { version = "*", features = ["lua54", "serde", "vendored"] }
+mlua = { version = "*", features = ["lua54", "serde"] }
 regex = "*"
 serde = { version = "*", features = ["derive"] }
 thiserror = "*"
