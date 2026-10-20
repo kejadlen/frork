@@ -1,0 +1,68 @@
+name: Standalone
+
+# Builds the Linux and macOS SDKs the release publishes, compiles the example
+# script against each with `frork compile` on one Linux runner (zig
+# cross-compiles), then runs each binary on its own platform.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  LUA_VERSION: 5.4.8
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup target add aarch64-apple-darwin && rustup component add llvm-tools
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.17.0
+      - run: curl -sSfL "https://www.lua.org/ftp/lua-${LUA_VERSION}.tar.gz" | tar xz
+      - name: Build SDKs and compile the example with frork
+        run: |
+          export LUA_SRC="$PWD/lua-${LUA_VERSION}/src"
+          cargo build -p frork-cli
+          mkdir dist
+          for target in x86_64-unknown-linux-gnu aarch64-apple-darwin; do
+            bin/build-sdk "$target" "sdk-$target.tar.gz"
+            mkdir "sdk-$target" && tar -xzf "sdk-$target.tar.gz" -C "sdk-$target"
+            target/debug/frork compile examples/standalone/main.fnl \
+              -o "dist/demo-$target" --target "$target" --sdk "sdk-$target"
+          done
+          mv dist/demo-x86_64-unknown-linux-gnu dist/demo-linux
+          mv dist/demo-aarch64-apple-darwin dist/demo-macos
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: demo
+          path: dist
+
+  run:
+    needs: build
+    strategy:
+      matrix:
+        include:
+          - { os: ubuntu-latest, exe: demo-linux }
+          - { os: macos-latest, exe: demo-macos }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: demo
+      - name: Satisfy, then check everything is ok
+        run: |
+          chmod +x "./${MATRIX_EXE}"
+          export FRORK_DEMO_ROOT="$RUNNER_TEMP/demo"
+          "./${MATRIX_EXE}" --satisfy
+          "./${MATRIX_EXE}" | tee status.txt
+          ! grep missing status.txt
+          test -L "$FRORK_DEMO_ROOT/settings.txt"
+          cat "$FRORK_DEMO_ROOT/settings.txt"
+        env:
+          MATRIX_EXE: ${{ matrix.exe }}

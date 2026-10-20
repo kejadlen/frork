@@ -82,17 +82,25 @@ $ frork check '(ok :directory "~/src")'
 $ frork do '(ok :directory "~/src")'
 ```
 
-## Design goal: compiled Fennel binaries
+## Standalone binaries
 
-A long-term goal is compiling Fennel scripts into standalone binaries —
-no Rust toolchain or frork CLI needed at runtime. The frork-lua crate
-exists to support this: it builds as a C dynamic library that exposes
-frork's assertion engine as a Lua module, which Fennel's
-`--compile-binary` could link against a static Lua library.
+`frork compile` turns a script into a standalone executable with Fennel's
+own `--compile-binary`, for the platform frork runs on or any other it
+publishes an SDK for:
 
-This doesn't work yet, but the desire for it drives the split between
-frork-cli (embedded Lua, the primary interface) and frork-lua (cdylib,
-future compilation target).
+```
+frork compile dotfiles.fnl -o dotfiles --target aarch64-apple-darwin
+./dotfiles            # report, like `frork status`
+./dotfiles --satisfy  # install missing assertions, like `frork satisfy`
+```
+
+Modules and macros next to the script are compiled in. Compiling needs
+[zig](https://ziglang.org) on `PATH` as the C compiler (or set `CC`). The
+SDK for the target (the frork engine and Lua, built for it) is downloaded
+from this release the first time and cached under `~/.cache/frork/sdk`;
+release SDKs cover aarch64/x86_64 macOS and Linux. Development builds have
+no published SDK, so build one with `bin/build-sdk <target> <file.tar.gz>`
+and pass the unpacked directory as `--sdk`.
 
 ## Development
 

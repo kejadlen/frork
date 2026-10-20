@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+
+# Builds the SDK that `frork compile` links a script against for one target:
+# the frork engine as a static Lua module, a static Lua, Lua's headers, and
+# the system libraries Rust's standard library needs there.
+#
+#   bin/build-sdk <target> <output.tar.gz>
+#
+# <target> is a Rust target triple, cross-compiled with zig. Needs LUA_SRC,
+# a Lua 5.4 source directory.
+
+set -euo pipefail
+if [[ "${TRACE-0}" == "1" ]]; then
+    set -o xtrace
+fi
+
+readonly TARGET="$1"
+OUTPUT="$(realpath -m "$2")"
+readonly OUTPUT
+readonly BUILD="$PWD/target/sdk/$TARGET"
+LLVM_BIN="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin"
+readonly LLVM_BIN
+
+main() {
+    local cc lua_defs
+    case "$TARGET" in
+        *-apple-darwin)
+            cc="zig cc -target ${TARGET%%-*}-macos"
+            lua_defs=-DLUA_USE_MACOSX
+            ;;
+        *-linux-gnu)
+            cc="zig cc -target ${TARGET%%-*}-linux-gnu"
+            lua_defs=-DLUA_USE_LINUX
+            ;;
+        *)
+            echo "unsupported target: $TARGET" >&2
+            exit 1
+            ;;
+    esac
+
+    rm -rf "$BUILD"
+    mkdir -p "$BUILD/obj" "$BUILD/sdk/include"
+
+    # The engine, as a Lua module that expects its host to provide Lua.
+    cargo rustc --quiet -p frork --release --target "$TARGET" --crate-type staticlib
+    cp "target/$TARGET/release/libfrork.a" "$BUILD/sdk/"
+    cargo rustc --quiet -p frork --release --target "$TARGET" \
+        --crate-type staticlib -- --print native-static-libs 2>&1 |
+        sed -n 's/.*native-static-libs: //p' |
+        # zig has no libiconv for macOS; std references none of it.
+        sed 's/-liconv//' >"$BUILD/sdk/link-flags"
+
+    local src
+    for src in "$LUA_SRC"/*.c; do
+        case "$(basename "$src")" in lua.c | luac.c) continue ;; esac
+        $cc -O2 "$lua_defs" -c "$src" -o "$BUILD/obj/$(basename "$src" .c).o"
+    done
+    "$LLVM_BIN/llvm-ar" rcs "$BUILD/sdk/liblua.a" "$BUILD"/obj/*.o
+    cp "$LUA_SRC"/{lua.h,luaconf.h,lualib.h,lauxlib.h} "$BUILD/sdk/include/"
+
+    tar -czf "$OUTPUT" -C "$BUILD/sdk" .
+}
+
+main

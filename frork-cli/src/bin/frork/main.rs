@@ -4,6 +4,8 @@ use clap::Subcommand;
 use clap_complete::Shell;
 use frork_cli::assertions::AssertionType;
 use frork_cli::assertions::Status;
+use frork_cli::compile;
+use frork_cli::compile::Sdk;
 use frork_cli::report;
 use frork_cli::runtime::run_code;
 use frork_cli::runtime::run_script;
@@ -16,6 +18,7 @@ use tracing_subscriber::prelude::*;
 
 /// CalVer, set by build.rs — the crate version is not what ships.
 const VERSION: &str = env!("FRORK_VERSION");
+const TARGET: &str = env!("FRORK_TARGET");
 
 #[derive(Parser)]
 #[command(name = "frork", version = VERSION)]
@@ -31,10 +34,31 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Check { code: String },
-    Do { code: String },
-    Status { script: String },
-    Satisfy { script: String },
+    Check {
+        code: String,
+    },
+    Do {
+        code: String,
+    },
+    Status {
+        script: String,
+    },
+    Satisfy {
+        script: String,
+    },
+    /// Compile a script into a standalone executable.
+    Compile {
+        script: String,
+        #[arg(short, long)]
+        output: String,
+        /// The Rust target triple to build for.
+        #[arg(long, default_value = TARGET)]
+        target: String,
+        /// A directory holding the target's SDK, instead of downloading the
+        /// one published with this release.
+        #[arg(long)]
+        sdk: Option<std::path::PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -67,7 +91,30 @@ fn run(command: &Commands) -> Result<()> {
         Commands::Do { code } => run_code(code, satisfy),
         Commands::Status { script } => run_script(script, status),
         Commands::Satisfy { script } => run_script(script, satisfy),
+        Commands::Compile {
+            script,
+            output,
+            target,
+            sdk,
+        } => {
+            let sdk = match sdk {
+                Some(dir) => Sdk::new(dir),
+                None => Sdk::cached(&sdk_cache()?, compile::RELEASES_URL, VERSION, target)?,
+            };
+            let cc = match std::env::var("CC") {
+                Ok(cc) => cc,
+                Err(_) => compile::zig_cc(target)?,
+            };
+            compile::compile_binary(script, output, &sdk, &cc)
+        }
     }
+}
+
+fn sdk_cache() -> Result<std::path::PathBuf> {
+    xdg::BaseDirectories::with_prefix("frork")
+        .get_cache_home()
+        .map(|cache| cache.join("sdk"))
+        .ok_or_else(|| miette!("No cache directory: set XDG_CACHE_HOME or HOME"))
 }
 
 fn status(status: &Status, assertion: &dyn AssertionType) -> Result<()> {
