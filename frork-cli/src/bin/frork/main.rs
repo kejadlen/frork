@@ -10,6 +10,9 @@ use frork_cli::runtime::run_script;
 use miette::IntoDiagnostic as _;
 use miette::Result;
 use miette::miette;
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt;
+use tracing_subscriber::prelude::*;
 
 /// CalVer, set by build.rs — the crate version is not what ships.
 const VERSION: &str = env!("FRORK_VERSION");
@@ -38,7 +41,10 @@ fn main() -> Result<()> {
     // Assertion types panic through todo!() for cases that are not implemented
     // yet; this renders those with the same formatting as recoverable errors.
     miette::set_panic_hook();
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::registry()
+        .with(fmt::layer())
+        .with(EnvFilter::from_default_env())
+        .init();
 
     let cli = Cli::parse();
 
