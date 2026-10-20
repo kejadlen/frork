@@ -1,8 +1,8 @@
 name: Standalone
 
-# Compiles the example script with `fennel --compile-binary` for Linux and
-# macOS on one Linux runner (zig cross-compiles), then runs each binary on
-# its own platform.
+# Builds the Linux and macOS SDKs the release publishes, compiles the example
+# script against each with `frork compile` on one Linux runner (zig
+# cross-compiles), then runs each binary on its own platform.
 
 on:
   pull_request:
@@ -12,7 +12,6 @@ permissions: {}
 
 env:
   LUA_VERSION: 5.4.8
-  FENNEL_VERSION: 1.6.0
 
 jobs:
   build:
@@ -22,19 +21,22 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup target add aarch64-apple-darwin && rustup component add llvm-tools
-      - run: sudo apt-get install -y lua5.4 && pip install ziglang
-      - name: Fetch Lua sources and the Fennel CLI
-        run: |
-          curl -sSfL "https://www.lua.org/ftp/lua-${LUA_VERSION}.tar.gz" | tar xz
-          git clone --depth 1 --branch "${FENNEL_VERSION}" https://github.com/bakpakin/Fennel fennel
-          make -C fennel LUA=lua5.4 fennel
-      - name: Compile the example
+      - run: pip install ziglang
+      - run: curl -sSfL "https://www.lua.org/ftp/lua-${LUA_VERSION}.tar.gz" | tar xz
+      - name: Build SDKs and compile the example with frork
         run: |
           export PATH="$PATH:$(python3 -c 'import ziglang, os; print(os.path.dirname(ziglang.__file__))')"
-          export FENNEL="$PWD/fennel/fennel" LUA_SRC="$PWD/lua-${LUA_VERSION}/src"
+          export LUA_SRC="$PWD/lua-${LUA_VERSION}/src"
+          cargo build -p frork-cli
           mkdir dist
-          bin/compile-binary x86_64-unknown-linux-gnu examples/standalone/main.fnl dist/demo-linux
-          bin/compile-binary aarch64-apple-darwin examples/standalone/main.fnl dist/demo-macos
+          for target in x86_64-unknown-linux-gnu aarch64-apple-darwin; do
+            bin/build-sdk "$target" "sdk-$target.tar.gz"
+            mkdir "sdk-$target" && tar -xzf "sdk-$target.tar.gz" -C "sdk-$target"
+            target/debug/frork compile examples/standalone/main.fnl \
+              -o "dist/demo-$target" --target "$target" --sdk "sdk-$target"
+          done
+          mv dist/demo-x86_64-unknown-linux-gnu dist/demo-linux
+          mv dist/demo-aarch64-apple-darwin dist/demo-macos
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: demo

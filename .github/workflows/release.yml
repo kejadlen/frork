@@ -73,3 +73,38 @@ jobs:
           tag: v${{ needs.build.outputs.version }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
+
+  sdk:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # upload release assets
+    env:
+      LUA_VERSION: 5.4.8
+      TARGETS: >-
+        aarch64-apple-darwin x86_64-apple-darwin
+        aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+          persist-credentials: false
+
+      # The SDKs `frork compile` downloads to link a script for each target.
+      - name: Build SDKs
+        run: |
+          # shellcheck disable=SC2086 # TARGETS is a word list
+          rustup target add $TARGETS && rustup component add llvm-tools
+          pip install ziglang
+          export PATH="$PATH:$(python3 -c 'import ziglang, os; print(os.path.dirname(ziglang.__file__))')"
+          curl -sSfL "https://www.lua.org/ftp/lua-${LUA_VERSION}.tar.gz" | tar xz
+          export LUA_SRC="$PWD/lua-${LUA_VERSION}/src"
+          for target in $TARGETS; do
+            bin/build-sdk "$target" "frork-sdk-$target.tar.gz"
+          done
+
+      - name: Publish
+        run: gh release upload "v${VERSION}" frork-sdk-*.tar.gz
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
