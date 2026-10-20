@@ -5,7 +5,7 @@ edition = "2024"
 
 [[bin]]
 name = "frork"
-path = "src/main.rs"
+path = "src/bin/frork/main.rs"
 
 [dependencies]
 frork-lib = { path = "../frork-lib" }

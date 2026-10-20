@@ -26,4 +26,4 @@ exclude_re = [
 # it is excluded here the same way bin/coverage ignores it. Anything with a
 # decision in it belongs in a library module instead; report.rs holds the
 # wording and the prompt parsing for exactly this reason.
-exclude_globs = ["frork-cli/src/main.rs"]
+exclude_globs = ["frork-cli/src/bin/**"]

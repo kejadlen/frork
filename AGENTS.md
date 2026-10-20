@@ -30,7 +30,8 @@ frork-cli/
   build.rs                 # Sets FRORK_VERSION
   fennel-1.6.0.lua         # Vendored Fennel compiler
   src/
-    main.rs                # Entrypoint — clap CLI and status rendering only
+    bin/frork/
+      main.rs              # Entrypoint — clap CLI and status rendering only
     lib.rs                 # Library root — re-exports modules
     assertions.rs          # Assertion types and the AssertionType trait
     error.rs               # thiserror + miette::Diagnostic enum (FrorkError)
