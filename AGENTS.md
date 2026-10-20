@@ -41,6 +41,7 @@ frork-cli/
     utils.rs               # Shell helpers, path expansion, Lua bindings
   tests/
     cli.rs                 # Integration tests via assert_cmd
+    property.rs            # Hegel property tests (chomp, upgrade prompt)
 frork-lib/
   Cargo.toml               # Shared library crate (currently empty)
   src/lib.rs
