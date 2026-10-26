@@ -86,13 +86,9 @@ $ frork do '(ok :directory "~/src")'
 
 A long-term goal is compiling Fennel scripts into standalone binaries —
 no Rust toolchain or frork CLI needed at runtime. The frork-lua crate
-exists to support this: it builds as a C dynamic library that exposes
-frork's assertion engine as a Lua module, which Fennel's
-`--compile-binary` could link against a static Lua library.
-
-This doesn't work yet, but the desire for it drives the split between
-frork-cli (embedded Lua, the primary interface) and frork-lua (cdylib,
-future compilation target).
+exists to support this: it builds frork's assertion engine as a Lua
+module, both a C dynamic library and a static one that Fennel's
+`--compile-binary --native-module` can link into a standalone binary.
 
 ## Development
 

@@ -47,8 +47,8 @@ frork-lib/
   tests/
     property.rs            # Hegel property tests (chomp, upgrade prompt)
 frork-lua/
-  Cargo.toml               # Lua C module crate (cdylib)
-  src/lib.rs               # mlua module exposing frork to Lua
+  Cargo.toml               # Lua C module crate (cdylib + staticlib)
+  src/lib.rs               # mlua module exposing frork-lib to Lua
 ```
 
 ## Build and test
@@ -163,4 +163,4 @@ Fennel scripts can register new assertion types via `frork.register(name, {statu
 
 ### frork-lib, frork-cli and frork-lua
 
-frork-lib is the engine and depends on neither of the others. frork-cli wraps it in the `frork` CLI with a vendored Lua and is the primary interface. frork-lua builds a `cdylib` for use as a standalone Lua module (`require("frork")`), with mlua in `module` mode against the host's Lua. frork-cli and frork-lua cannot be built together due to those conflicting mlua features.
+frork-lib is the engine and depends on neither of the others. frork-cli wraps it in the `frork` CLI with a vendored Lua and is the primary interface. frork-lua exposes it as a Lua module (`require("frork")`): a `cdylib`, and a `staticlib` for linking into a program that hosts its own Lua, such as one from `fennel --compile-binary --native-module`; mlua runs in `module` mode there, against the host's Lua. frork-cli and frork-lua cannot be built together due to those conflicting mlua features.
