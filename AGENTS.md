@@ -12,6 +12,7 @@ Cargo.lock
 README.md
 justfile                   # Local dev tasks (fmt, clippy, coverage, mutants, install)
 bin/coverage               # grcov coverage report and threshold gate
+bin/build-sdk              # Per-target SDK (engine + Lua) for standalone binaries
 .clippy.toml               # Enforces fs-err over std::fs, bans for_each
 .envrc                     # direnv config
 .gitignore
