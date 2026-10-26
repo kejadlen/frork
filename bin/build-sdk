@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Builds the SDK a standalone Fennel binary links against for one target:
+# Builds the SDK that `frork compile` links a script against for one target:
 # the frork engine as a static Lua module, a static Lua, Lua's headers, and
 # the system libraries Rust's standard library needs there.
 #

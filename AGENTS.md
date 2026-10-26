@@ -12,7 +12,7 @@ Cargo.lock
 README.md
 justfile                   # Local dev tasks (fmt, clippy, coverage, mutants, install)
 bin/coverage               # grcov coverage report and threshold gate
-bin/build-sdk              # Per-target SDK (engine + Lua) for standalone binaries
+bin/build-sdk              # Per-target SDK (engine + Lua) for `frork compile`
 .clippy.toml               # Enforces fs-err over std::fs, bans for_each
 .envrc                     # direnv config
 .gitignore
@@ -26,6 +26,7 @@ bin/build-sdk              # Per-target SDK (engine + Lua) for standalone binari
   workflows/
     ci.yml                 # fmt + clippy + coverage
     release.yml            # CalVer release on CI success, plus DotSlash
+    standalone.yml         # Compiles the example for Linux/macOS, runs each
 frork-cli/
   Cargo.toml               # Binary crate — the `frork` CLI; vendors Lua
   build.rs                 # Sets FRORK_VERSION
@@ -37,9 +38,11 @@ frork-cli/
 frork-lib/
   Cargo.toml               # The engine, shared by frork-cli and frork-lua
   fennel-1.6.0.lua         # Vendored Fennel compiler
+  fennel-binary-1.6.0.lua  # Vendored Fennel --compile-binary (binary.fnl, AOT)
   src/
     lib.rs                 # Library root — re-exports modules
     assertions.rs          # Assertion types and the AssertionType trait
+    compile.rs             # `frork compile`: Fennel --compile-binary against an SDK
     error.rs               # thiserror + miette::Diagnostic enum (FrorkError)
     registry.rs            # Assertion type name to factory dispatch
     report.rs              # Status wording and upgrade-prompt parsing
@@ -110,12 +113,13 @@ Two workspace-specific details the script depends on:
 
 ### CLI
 
-The CLI (`frork`) uses clap with four subcommands:
+The CLI (`frork`) uses clap with five subcommands:
 
 - `check <code>` — evaluate inline Fennel code, report status only
 - `do <code>` — evaluate inline Fennel code, satisfy missing assertions
 - `status <script>` — evaluate a `.fnl` script file, report status only
 - `satisfy <script>` — evaluate a `.fnl` script file, satisfy missing assertions
+- `compile <script> -o <out> --sdk <dir>` — compile a script into a standalone executable (see below)
 
 A `--completions <shell>` flag generates shell completions and exits.
 
@@ -165,3 +169,7 @@ Fennel scripts can register new assertion types via `frork.register(name, {statu
 ### frork-lib, frork-cli and frork-lua
 
 frork-lib is the engine and depends on neither of the others. frork-cli wraps it in the `frork` CLI with a vendored Lua and is the primary interface. frork-lua exposes it as a Lua module (`require("frork")`): a `cdylib`, and a `staticlib` for linking into a program that hosts its own Lua, such as one from `fennel --compile-binary --native-module`; mlua runs in `module` mode there, against the host's Lua. frork-cli and frork-lua cannot be built together due to those conflicting mlua features.
+
+### Standalone binaries
+
+`frork compile` runs the vendored `fennel-binary-1.6.0.lua` (Fennel's `--compile-binary`) inside frork, standing in for its `os.getenv` and `os.exit`. It links against an SDK per target, built by `bin/build-sdk`: `libfrork.a` (frork-lua's staticlib), `liblua.a`, Lua's headers, and `link-flags`. zig is the C compiler, so any host can target any platform with an SDK.
