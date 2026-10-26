@@ -11,8 +11,8 @@
     )
 )]
 
-use frork_cli::report;
-use frork_cli::utils::Utils;
+use frork_lib::report;
+use frork_lib::utils::Utils;
 use hegel::TestCase;
 use hegel::generators::text;
 

@@ -97,8 +97,8 @@ future compilation target).
 ## Development
 
 ```
-cargo check -p frork-cli
-cargo test -p frork-cli
+cargo check -p frork-cli -p frork-lib
+cargo test -p frork-cli -p frork-lib
 just              # fmt + clippy + coverage
 ```
 

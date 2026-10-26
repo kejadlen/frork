@@ -5,13 +5,13 @@ fmt:
 
 # Not --workspace: frork-cli and frork-lua use incompatible mlua features.
 check:
-    cargo check -p frork-cli
+    cargo check -p frork-cli -p frork-lib
 
 clippy:
-    cargo clippy -p frork-cli --all-targets -- -D warnings
-    # frork-lib and frork (frork-lua) can be linted together — neither pulls
-    # in mlua's vendored feature, which conflicts with frork-cli's.
-    cargo clippy -p frork-lib -p frork -- -D warnings
+    # frork-lib's tests link a vendored Lua, so they lint alongside frork-cli.
+    cargo clippy -p frork-cli -p frork-lib --all-targets -- -D warnings
+    # frork (frork-lua) builds frork-lib against its host's Lua instead.
+    cargo clippy -p frork -- -D warnings
 
 coverage:
     ./bin/coverage
@@ -19,7 +19,7 @@ coverage:
 mutants:
     #!/usr/bin/env bash
     set -uo pipefail
-    cargo mutants -p frork-cli --timeout-multiplier 3 -j4
+    cargo mutants -p frork-cli -p frork-lib --timeout-multiplier 3 -j4
     rc=$?
     # 0 = all caught, 3 = timeouts (infinite loops from mutants, still caught).
     if [ "$rc" -eq 0 ] || [ "$rc" -eq 3 ]; then

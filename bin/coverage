@@ -24,7 +24,7 @@ main() {
 
     rm -rf "$TARGET_DIR" frork-*/target/coverage
     # Not --workspace: frork-cli and frork-lua use incompatible mlua features.
-    cargo test -p frork-cli --quiet
+    cargo test -p frork-cli -p frork-lib --quiet
 
     local report
     report=$(grcov "$TARGET_DIR/profraw" \

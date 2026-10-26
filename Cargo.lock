@@ -332,11 +332,20 @@ dependencies = [
  "clap",
  "clap_complete",
  "frork-lib",
+ "miette",
+ "mlua",
+ "predicates",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "frork-lib"
+version = "0.1.0"
+dependencies = [
  "fs-err",
  "hegeltest",
  "miette",
  "mlua",
- "predicates",
  "regex",
  "serde",
  "tempfile",
@@ -344,10 +353,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
 ]
-
-[[package]]
-name = "frork-lib"
-version = "0.1.0"
 
 [[package]]
 name = "fs-err"

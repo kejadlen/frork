@@ -3,6 +3,24 @@ name = "frork-lib"
 version = "0.1.0"
 edition = "2024"
 
+# The engine: assertion types, the registry, and the Lua/Fennel runtime.
+# Which Lua mlua links is left to the crate that builds the final artifact:
+# frork-cli vendors one, frork-lua uses its host's.
+[dependencies]
+miette = "*"
+fs-err = "*"
+mlua = { version = "*", features = ["lua54", "serde"] }
+regex = "*"
+serde = { version = "*", features = ["derive"] }
+thiserror = "*"
+tracing = "*"
+
+[dev-dependencies]
+hegeltest = "*"
+# Tests run their own Lua states, so they need one linked in.
+mlua = { version = "*", features = ["lua54", "vendored"] }
+tempfile = "*"
+tracing-subscriber = "*"
+
 [lints]
 workspace = true
-

@@ -10,21 +10,15 @@ path = "src/bin/frork/main.rs"
 [dependencies]
 frork-lib = { path = "../frork-lib" }
 miette = { version = "*", features = ["fancy"] }
-fs-err = "*"
 clap = { version = "*", features = ["derive", "env"] }
 clap_complete = "*"
-mlua = { version = "*", features = ["lua54", "serde", "vendored"] }
-regex = "*"
-serde = { version = "*", features = ["derive"] }
-thiserror = "*"
-tracing = "*"
+# Not used directly: links a vendored Lua for frork-lib's engine.
+mlua = { version = "*", features = ["lua54", "vendored"] }
 tracing-subscriber = { version = "*", features = ["env-filter"] }
 
 [dev-dependencies]
 assert_cmd = "*"
 predicates = "*"
-hegeltest = "*"
-tempfile = "*"
 
 [lints]
 workspace = true
