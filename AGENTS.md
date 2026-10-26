@@ -25,7 +25,7 @@ bin/build-sdk              # Per-target SDK (engine + Lua) for `frork compile`
   dotslash-config.json     # DotSlash launcher config for releases
   workflows/
     ci.yml                 # fmt + clippy + coverage
-    release.yml            # CalVer release on CI success, plus DotSlash
+    release.yml            # CalVer release on CI success, plus DotSlash and SDKs
     standalone.yml         # Compiles the example for Linux/macOS, runs each
 frork-cli/
   Cargo.toml               # Binary crate — the `frork` CLI; vendors Lua
@@ -42,7 +42,7 @@ frork-lib/
   src/
     lib.rs                 # Library root — re-exports modules
     assertions.rs          # Assertion types and the AssertionType trait
-    compile.rs             # `frork compile`: Fennel --compile-binary against an SDK
+    compile.rs             # `frork compile`: SDK lookup, Fennel --compile-binary
     error.rs               # thiserror + miette::Diagnostic enum (FrorkError)
     registry.rs            # Assertion type name to factory dispatch
     report.rs              # Status wording and upgrade-prompt parsing
@@ -119,7 +119,7 @@ The CLI (`frork`) uses clap with five subcommands:
 - `do <code>` — evaluate inline Fennel code, satisfy missing assertions
 - `status <script>` — evaluate a `.fnl` script file, report status only
 - `satisfy <script>` — evaluate a `.fnl` script file, satisfy missing assertions
-- `compile <script> -o <out> --sdk <dir>` — compile a script into a standalone executable (see below)
+- `compile <script> -o <out>` — compile a script into a standalone executable (see below)
 
 A `--completions <shell>` flag generates shell completions and exits.
 
@@ -172,4 +172,4 @@ frork-lib is the engine and depends on neither of the others. frork-cli wraps it
 
 ### Standalone binaries
 
-`frork compile` runs the vendored `fennel-binary-1.6.0.lua` (Fennel's `--compile-binary`) inside frork, standing in for its `os.getenv` and `os.exit`. It links against an SDK per target, built by `bin/build-sdk`: `libfrork.a` (frork-lua's staticlib), `liblua.a`, Lua's headers, and `link-flags`. zig is the C compiler, so any host can target any platform with an SDK.
+`frork compile` runs the vendored `fennel-binary-1.6.0.lua` (Fennel's `--compile-binary`) inside frork, standing in for its `os.getenv` and `os.exit`. It links against an SDK per target: `libfrork.a` (frork-lua's staticlib), `liblua.a`, Lua's headers, and `link-flags`. Releases publish them as `frork-sdk-<target>.tar.gz`, built by `bin/build-sdk`, and `frork compile` downloads the one matching its own version. zig is the C compiler, so any host can target any published platform.

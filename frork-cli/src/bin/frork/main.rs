@@ -54,10 +54,10 @@ enum Commands {
         /// The Rust target triple to build for.
         #[arg(long, default_value = TARGET)]
         target: String,
-        /// A directory holding the target's SDK, unpacked from
-        /// `bin/build-sdk`.
+        /// A directory holding the target's SDK, instead of downloading the
+        /// one published with this release.
         #[arg(long)]
-        sdk: std::path::PathBuf,
+        sdk: Option<std::path::PathBuf>,
     },
 }
 
@@ -97,7 +97,10 @@ fn run(command: &Commands) -> Result<()> {
             target,
             sdk,
         } => {
-            let sdk = Sdk::new(sdk);
+            let sdk = match sdk {
+                Some(dir) => Sdk::new(dir),
+                None => Sdk::cached(&sdk_cache()?, compile::RELEASES_URL, VERSION, target)?,
+            };
             let cc = match std::env::var("CC") {
                 Ok(cc) => cc,
                 Err(_) => compile::zig_cc(target)?,
@@ -105,6 +108,13 @@ fn run(command: &Commands) -> Result<()> {
             compile::compile_binary(script, output, &sdk, &cc)
         }
     }
+}
+
+fn sdk_cache() -> Result<std::path::PathBuf> {
+    xdg::BaseDirectories::with_prefix("frork")
+        .get_cache_home()
+        .map(|cache| cache.join("sdk"))
+        .ok_or_else(|| miette!("No cache directory: set XDG_CACHE_HOME or HOME"))
 }
 
 fn status(status: &Status, assertion: &dyn AssertionType) -> Result<()> {

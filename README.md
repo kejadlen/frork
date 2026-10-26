@@ -85,19 +85,22 @@ $ frork do '(ok :directory "~/src")'
 ## Standalone binaries
 
 `frork compile` turns a script into a standalone executable with Fennel's
-own `--compile-binary`, for the platform frork runs on or another one:
+own `--compile-binary`, for the platform frork runs on or any other it
+publishes an SDK for:
 
 ```
-bin/build-sdk aarch64-apple-darwin sdk.tar.gz   # needs LUA_SRC, zig
-mkdir sdk && tar -xzf sdk.tar.gz -C sdk
-frork compile dotfiles.fnl -o dotfiles --target aarch64-apple-darwin --sdk sdk
+frork compile dotfiles.fnl -o dotfiles --target aarch64-apple-darwin
 ./dotfiles            # report, like `frork status`
 ./dotfiles --satisfy  # install missing assertions, like `frork satisfy`
 ```
 
 Modules and macros next to the script are compiled in. Compiling needs
 [zig](https://ziglang.org) on `PATH` as the C compiler (or set `CC`). The
-SDK holds the frork engine and Lua, built for the target.
+SDK for the target (the frork engine and Lua, built for it) is downloaded
+from this release the first time and cached under `~/.cache/frork/sdk`;
+release SDKs cover aarch64/x86_64 macOS and Linux. Development builds have
+no published SDK, so build one with `bin/build-sdk <target> <file.tar.gz>`
+and pass the unpacked directory as `--sdk`.
 
 ## Development
 

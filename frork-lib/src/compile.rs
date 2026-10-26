@@ -3,15 +3,19 @@
 //!
 //! The executable links three things built for its target: Lua, the frork
 //! engine as a native Lua module, and the script. The first two come from an
-//! SDK for the target (see `bin/build-sdk`), so compiling needs only a C
+//! SDK that each release publishes per target, so compiling needs only a C
 //! compiler (zig, for cross-compiling) and no Rust toolchain.
 
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 
 use miette::Result;
 use miette::miette;
 use mlua::prelude::*;
+
+/// Where releases publish SDKs, one `frork-sdk-<target>.tar.gz` per tag.
+pub const RELEASES_URL: &str = "https://github.com/kejadlen/frork/releases/download";
 
 /// Runs Fennel's binary compiler with the SDK's paths and compiler settings.
 /// Fennel reads those from the environment and ends with `os.exit`, so both
@@ -49,6 +53,25 @@ impl Sdk {
         Self { dir: dir.into() }
     }
 
+    /// The SDK for `target` matching this frork's `version`, downloaded into
+    /// `cache` from `releases_url` the first time it is needed.
+    pub fn cached(cache: &Path, releases_url: &str, version: &str, target: &str) -> Result<Self> {
+        if version.ends_with("-dev") {
+            return Err(miette!(
+                "{version} is a development build with no published SDK; pass --sdk"
+            ));
+        }
+        let sdk = Self::new(cache.join(version).join(target));
+        if !sdk.dir.exists() {
+            let tag = format!("v{version}").replace('+', "%2B");
+            fetch(
+                &format!("{releases_url}/{tag}/frork-sdk-{target}.tar.gz"),
+                &sdk.dir,
+            )?;
+        }
+        Ok(sdk)
+    }
+
     fn path(&self, name: &str) -> Result<String> {
         let path = self.dir.join(name);
         path.to_str()
@@ -63,8 +86,35 @@ impl Sdk {
     }
 }
 
+/// Downloads and unpacks an SDK archive into `dest`, which must not exist.
+fn fetch(url: &str, dest: &Path) -> Result<()> {
+    let partial = dest.with_extension("partial");
+    let archive = partial.join("sdk.tar.gz");
+    fs_err::create_dir_all(&partial).map_err(|e| miette!("{e}"))?;
+    run(Command::new("curl")
+        .args(["-fsSL", "-o"])
+        .arg(&archive)
+        .arg(url))?;
+    run(Command::new("tar")
+        .arg("-xzf")
+        .arg(&archive)
+        .arg("-C")
+        .arg(&partial))?;
+    fs_err::remove_file(&archive).map_err(|e| miette!("{e}"))?;
+    fs_err::rename(&partial, dest).map_err(|e| miette!("{e}"))
+}
+
+fn run(command: &mut Command) -> Result<()> {
+    let status = command.status().map_err(|e| miette!("{e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(miette!("{command:?} failed with {status}"))
+    }
+}
+
 /// The C compiler for `target`: zig, which cross-compiles to every target
-/// `bin/build-sdk` builds an SDK for.
+/// frork publishes an SDK for.
 pub fn zig_cc(target: &str) -> Result<String> {
     let zig_target = match target {
         "aarch64-apple-darwin" => "aarch64-macos",
@@ -234,6 +284,65 @@ mod tests {
             "zig cc -target x86_64-linux-gnu"
         );
         assert!(zig_cc("wasm32-unknown-unknown").is_err());
+    }
+
+    #[test]
+    fn test_cached_downloads_once_then_reuses() {
+        let dir = TempDir::new().unwrap();
+        let releases = dir.path().join("releases");
+        // curl decodes the %2B in the URL, so the file sits under a +.
+        let tag = releases.join("v2026-10-20+abc1234");
+        let staged = dir.path().join("staged");
+        fs_err::create_dir_all(&tag).unwrap();
+        fs_err::create_dir_all(&staged).unwrap();
+        fs_err::write(staged.join("link-flags"), "-lm").unwrap();
+        let archive = tag.join("frork-sdk-x86_64-unknown-linux-gnu.tar.gz");
+        run(Command::new("tar")
+            .arg("-czf")
+            .arg(&archive)
+            .arg("-C")
+            .arg(&staged)
+            .arg("."))
+        .unwrap();
+        let url = format!("file://{}", releases.display());
+        let cache = dir.path().join("cache");
+        let version = "2026-10-20+abc1234";
+        let target = "x86_64-unknown-linux-gnu";
+
+        let sdk = Sdk::cached(&cache, &url, version, target).unwrap();
+        assert_eq!(sdk.link_flags().unwrap(), "-lm");
+
+        // A second lookup must not download: the archive is gone.
+        fs_err::remove_file(&archive).unwrap();
+        let sdk = Sdk::cached(&cache, &url, version, target).unwrap();
+        assert_eq!(sdk.link_flags().unwrap(), "-lm");
+    }
+
+    #[test]
+    fn test_cached_reports_a_missing_release() {
+        let dir = TempDir::new().unwrap();
+        let url = format!("file://{}", dir.path().display());
+
+        let result = Sdk::cached(
+            dir.path(),
+            &url,
+            "2026-01-01+0000000",
+            "x86_64-apple-darwin",
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cached_refuses_development_builds() {
+        let dir = TempDir::new().unwrap();
+
+        let error = Sdk::cached(dir.path(), RELEASES_URL, "2026-10-20+abc-dev", "x").unwrap_err();
+        assert!(error.to_string().contains("--sdk"));
+    }
+
+    #[test]
+    fn test_run_reports_a_missing_program() {
+        assert!(run(&mut Command::new("/frork-does-not-exist")).is_err());
     }
 
     #[test]
