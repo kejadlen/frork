@@ -80,6 +80,21 @@ impl Source {
     }
 }
 
+/// The arguments of a compiled script, which runs in place of the CLI.
+#[derive(Parser)]
+#[command(name = "frork", version = frork_lib::VERSION)]
+#[command(about = "Reports the assertions built into this script")]
+struct Standalone {
+    /// Create, update, or remove whatever doesn't match its assertion,
+    /// instead of only reporting.
+    #[arg(long)]
+    apply: bool,
+
+    /// Passed to the script in Lua's `arg` table, after `--`.
+    #[arg(last = true)]
+    args: Vec<String>,
+}
+
 fn main() -> Result<()> {
     // Providers panic through todo!() for cases that are not implemented
     // yet; this renders those with the same formatting as recoverable errors.
@@ -96,8 +111,10 @@ fn main() -> Result<()> {
 
     // A compiled script runs its payload in place of the CLI.
     if let Some(code) = payload()? {
-        let args: Vec<String> = std::env::args().collect();
-        return Ok(if args.iter().any(|arg| arg == "--apply") {
+        let standalone = Standalone::parse();
+        let program = std::env::args().next().unwrap_or_default();
+        let args = [vec![program], standalone.args].concat();
+        return Ok(if standalone.apply {
             run_lua(&code, &args, apply)
         } else {
             run_lua(&code, &args, check)

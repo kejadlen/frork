@@ -305,6 +305,10 @@ fn compiles_a_script_into_a_standalone_binary() {
         .assert()
         .success()
         .stdout(contains(": absent"));
-    Command::new(&exe).arg("--apply").assert().success();
+    Command::new(&exe).arg("--bogus").assert().failure();
+    Command::new(&exe)
+        .args(["--apply", "--", "--bogus"])
+        .assert()
+        .success();
     assert!(target.is_dir());
 }
