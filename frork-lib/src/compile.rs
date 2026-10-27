@@ -6,9 +6,11 @@
 //! only Fennel and copying bytes: no C compiler, and any host can build for
 //! any target it has a frork binary for.
 
+use std::fs::Permissions;
 use std::io::Read;
 use std::io::Seek;
 use std::io::SeekFrom;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -109,6 +111,24 @@ pub fn payload(mut exe: impl Read + Seek) -> std::io::Result<Option<Vec<u8>>> {
     let mut payload = Vec::new();
     exe.take(len).read_to_end(&mut payload)?;
     Ok(Some(payload))
+}
+
+/// Compiles `script` into the standalone executable `output`, built on the
+/// frork binary `runner`, or on this frork itself when there is none.
+pub fn compile(script: &str, runner: Option<&Path>, output: &Path) -> Result<()> {
+    let runner = match runner {
+        Some(runner) => fs_err::read(runner)?,
+        None => fs_err::read(std::env::current_exe()?)?,
+    };
+    fs_err::write(output, bundle(&runner, &compile_lua(script)?))?;
+    fs_err::set_permissions(output, Permissions::from_mode(0o755)).map_err(CompileError::Io)
+}
+
+/// The payload this process's own executable carries, if it is a compiled
+/// script.
+pub fn own_payload() -> Result<Option<Vec<u8>>> {
+    let exe = fs_err::File::open(std::env::current_exe()?)?;
+    Ok(payload(exe)?)
 }
 
 /// The frork binaries `frork compile` builds on for other targets, cached
@@ -231,6 +251,43 @@ mod tests {
 
         let error = compile_lua(script.to_str().unwrap()).unwrap_err();
         assert!(matches!(error, CompileError::Fennel { .. }));
+    }
+
+    #[test]
+    fn test_compile_bundles_the_script_onto_the_runner() {
+        let dir = TempDir::new().unwrap();
+        let script = dir.path().join("main.fnl");
+        fs_err::write(&script, "(print :hi)").unwrap();
+        let runner = dir.path().join("runner");
+        fs_err::write(&runner, "runner bytes").unwrap();
+        let output = dir.path().join("out");
+
+        compile(script.to_str().unwrap(), Some(&runner), &output).unwrap();
+
+        let exe = fs_err::read(&output).unwrap();
+        assert!(exe.starts_with(b"runner bytes"));
+        let lua = payload(Cursor::new(&exe)).unwrap().unwrap();
+        assert!(String::from_utf8(lua).unwrap().contains("print"));
+        let mode = fs_err::metadata(&output).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755);
+    }
+
+    #[test]
+    fn test_compile_defaults_to_this_executable() {
+        let dir = TempDir::new().unwrap();
+        let script = dir.path().join("main.fnl");
+        fs_err::write(&script, "(print :hi)").unwrap();
+        let output = dir.path().join("out");
+
+        compile(script.to_str().unwrap(), None, &output).unwrap();
+
+        let this = fs_err::read(std::env::current_exe().unwrap()).unwrap();
+        assert!(fs_err::read(&output).unwrap().starts_with(&this));
+    }
+
+    #[test]
+    fn test_a_test_binary_carries_no_payload() {
+        assert_eq!(own_payload().unwrap(), None);
     }
 
     #[test]
