@@ -12,13 +12,16 @@ frork-lib = { path = "../frork-lib" }
 miette = { version = "*", features = ["fancy"] }
 clap = { version = "*", features = ["derive", "env"] }
 clap_complete = "*"
+fs-err = "*"
 # Not used directly: links a vendored Lua for frork-lib's engine.
 mlua = { version = "*", features = ["lua54", "vendored"] }
 tracing-subscriber = { version = "*", features = ["env-filter"] }
+xdg = "*"
 
 [dev-dependencies]
 assert_cmd = "*"
 predicates = "*"
+tempfile = "*"
 
 [lints]
 workspace = true

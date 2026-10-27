@@ -5,6 +5,18 @@
         "macos-aarch64": {
           "regex": "^frork-aarch64-apple-darwin\\.tar\\.gz$",
           "path": "frork"
+        },
+        "macos-x86_64": {
+          "regex": "^frork-x86_64-apple-darwin\\.tar\\.gz$",
+          "path": "frork"
+        },
+        "linux-aarch64": {
+          "regex": "^frork-aarch64-unknown-linux-gnu\\.tar\\.gz$",
+          "path": "frork"
+        },
+        "linux-x86_64": {
+          "regex": "^frork-x86_64-unknown-linux-gnu\\.tar\\.gz$",
+          "path": "frork"
         }
       }
     }
