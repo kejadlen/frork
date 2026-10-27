@@ -1,4 +1,3 @@
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
 
 use clap::CommandFactory;
@@ -53,7 +52,7 @@ enum Commands {
     Compile {
         script: String,
         #[arg(short, long)]
-        output: String,
+        output: PathBuf,
         /// The Rust target triple to build for.
         #[arg(long, default_value = TARGET)]
         target: String,
@@ -88,7 +87,7 @@ fn main() -> Result<()> {
         .init();
 
     // A compiled script runs its payload in place of the CLI.
-    if let Some(code) = payload()? {
+    if let Some(code) = compile::own_payload()? {
         return run_standalone(&code);
     }
 
@@ -120,15 +119,11 @@ fn run(command: &Commands) -> Result<()> {
             runner,
         } => {
             let runner = match runner {
-                Some(runner) => runner.clone(),
-                None if target == TARGET => std::env::current_exe().into_diagnostic()?,
-                None => compile::Runners::default().get(VERSION, target)?,
+                Some(runner) => Some(runner.clone()),
+                None if target == TARGET => None,
+                None => Some(compile::Runners::default().get(VERSION, target)?),
             };
-            let runner = fs_err::read(runner).into_diagnostic()?;
-            let exe = compile::bundle(&runner, &compile::compile_lua(script)?);
-            fs_err::write(output, exe).into_diagnostic()?;
-            fs_err::set_permissions(output, std::fs::Permissions::from_mode(0o755))
-                .into_diagnostic()
+            Ok(compile::compile(script, runner.as_deref(), output)?)
         }
     }
 }
@@ -147,11 +142,6 @@ fn run_standalone(code: &[u8]) -> Result<()> {
         }
     };
     run_lua(code, &program, &args, handle_status)
-}
-
-fn payload() -> Result<Option<Vec<u8>>> {
-    let exe = fs_err::File::open(std::env::current_exe().into_diagnostic()?).into_diagnostic()?;
-    compile::payload(exe).into_diagnostic()
 }
 
 fn status(status: &Status, assertion: &dyn AssertionType) -> Result<()> {
