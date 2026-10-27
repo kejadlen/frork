@@ -64,6 +64,10 @@ fn compiles_a_script_into_a_standalone_binary() {
         .assert()
         .success()
         .stdout(contains("missing: directory"));
-    Command::new(&exe).arg("--satisfy").assert().success();
+    Command::new(&exe).arg("--bogus").assert().failure();
+    Command::new(&exe)
+        .args(["--satisfy", "--", "--bogus"])
+        .assert()
+        .success();
     assert!(target.is_dir());
 }

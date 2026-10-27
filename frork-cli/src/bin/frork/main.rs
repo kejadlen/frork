@@ -64,6 +64,20 @@ enum Commands {
     },
 }
 
+/// The arguments of a compiled script, which runs in place of the CLI.
+#[derive(Parser)]
+#[command(name = "frork", version = VERSION)]
+#[command(about = "Reports the assertions built into this script")]
+struct Standalone {
+    /// Install missing assertions instead of only reporting them.
+    #[arg(long)]
+    satisfy: bool,
+
+    /// Passed to the script in Lua's `arg` table, after `--`.
+    #[arg(last = true)]
+    args: Vec<String>,
+}
+
 fn main() -> Result<()> {
     // Assertion types panic through todo!() for cases that are not implemented
     // yet; this renders those with the same formatting as recoverable errors.
@@ -75,8 +89,10 @@ fn main() -> Result<()> {
 
     // A compiled script runs its payload in place of the CLI.
     if let Some(code) = payload()? {
-        let args: Vec<String> = std::env::args().collect();
-        return if args.iter().any(|arg| arg == "--satisfy") {
+        let standalone = Standalone::parse();
+        let program = std::env::args().next().unwrap_or_default();
+        let args = [vec![program], standalone.args].concat();
+        return if standalone.satisfy {
             run_lua(&code, &args, satisfy)
         } else {
             run_lua(&code, &args, status)
