@@ -1,3 +1,6 @@
+use std::os::unix::fs::PermissionsExt as _;
+use std::path::PathBuf;
+
 use clap::Args;
 use clap::CommandFactory;
 use clap::Parser;
@@ -5,6 +8,7 @@ use clap::Subcommand;
 use clap_complete::Shell;
 use frork_lib::assertions::Assertion;
 use frork_lib::assertions::Status;
+use frork_lib::compile;
 use frork_lib::error::FrorkError;
 use frork_lib::error::SharedError;
 use frork_lib::report;
@@ -12,9 +16,11 @@ use frork_lib::report::Action;
 use frork_lib::runtime::Declaration;
 use frork_lib::runtime::StatusHandler;
 use frork_lib::runtime::run_code;
+use frork_lib::runtime::run_lua;
 use frork_lib::runtime::run_script;
 use miette::IntoDiagnostic as _;
 use miette::Result;
+use miette::miette;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt;
@@ -38,6 +44,19 @@ enum Commands {
     Check(Source),
     /// Create, update, or remove whatever doesn't match its assertion.
     Apply(Source),
+    /// Compile a script into a standalone executable.
+    Compile {
+        script: String,
+        #[arg(short, long)]
+        output: String,
+        /// The Rust target triple to build for.
+        #[arg(long, default_value = frork_lib::TARGET)]
+        target: String,
+        /// A frork binary for the target to build on, instead of this one
+        /// (for the host) or the one published with this release.
+        #[arg(long)]
+        runner: Option<PathBuf>,
+    },
 }
 
 #[derive(Args)]
@@ -75,6 +94,16 @@ fn main() -> Result<()> {
         .with(filter)
         .init();
 
+    // A compiled script runs its payload in place of the CLI.
+    if let Some(code) = payload()? {
+        let args: Vec<String> = std::env::args().collect();
+        return Ok(if args.iter().any(|arg| arg == "--apply") {
+            run_lua(&code, &args, apply)
+        } else {
+            run_lua(&code, &args, check)
+        }?);
+    }
+
     let cli = Cli::parse();
 
     if let Some(shell) = cli.completions {
@@ -94,7 +123,41 @@ fn run(command: &Commands) -> Result<()> {
     match command {
         Commands::Check(source) => source.run(check),
         Commands::Apply(source) => source.run(apply),
+        Commands::Compile {
+            script,
+            output,
+            target,
+            runner,
+        } => {
+            let runner = match runner {
+                Some(runner) => runner.clone(),
+                None if target == frork_lib::TARGET => std::env::current_exe().into_diagnostic()?,
+                None => compile::cached_runner(
+                    &runner_cache()?,
+                    compile::RELEASES_URL,
+                    frork_lib::VERSION,
+                    target,
+                )?,
+            };
+            let runner = fs_err::read(runner).into_diagnostic()?;
+            let exe = compile::bundle(&runner, &compile::compile_lua(script)?);
+            fs_err::write(output, exe).into_diagnostic()?;
+            fs_err::set_permissions(output, std::fs::Permissions::from_mode(0o755))
+                .into_diagnostic()
+        }
     }
+}
+
+fn payload() -> Result<Option<Vec<u8>>> {
+    let exe = fs_err::File::open(std::env::current_exe().into_diagnostic()?).into_diagnostic()?;
+    compile::payload(exe).into_diagnostic()
+}
+
+fn runner_cache() -> Result<PathBuf> {
+    xdg::BaseDirectories::with_prefix("frork")
+        .get_cache_home()
+        .map(|cache| cache.join("runners"))
+        .ok_or_else(|| miette!("No cache directory: set XDG_CACHE_HOME or HOME"))
 }
 
 fn check(

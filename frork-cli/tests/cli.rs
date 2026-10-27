@@ -1,3 +1,4 @@
+// Test code asserts on known-good fixtures.
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 use assert_cmd::Command;
@@ -275,4 +276,35 @@ fn apply_runs_no_from_a_script() {
         .assert()
         .success();
     assert!(marker.exists());
+}
+
+#[test]
+fn compiles_a_script_into_a_standalone_binary() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let script = dir.path().join("main.fnl");
+    let target = dir.path().join("made");
+    fs_err::write(
+        &script,
+        format!(
+            "((. (require :frork) :ok) :directory {:?})",
+            target.display()
+        ),
+    )
+    .unwrap();
+    let exe = dir.path().join("standalone");
+
+    cmd()
+        .arg("compile")
+        .arg(&script)
+        .arg("-o")
+        .arg(&exe)
+        .assert()
+        .success();
+
+    Command::new(&exe)
+        .assert()
+        .success()
+        .stdout(contains(": absent"));
+    Command::new(&exe).arg("--apply").assert().success();
+    assert!(target.is_dir());
 }
