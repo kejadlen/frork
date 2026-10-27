@@ -15,48 +15,79 @@ env:
   RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
-  build:
+  version:
     if: >-
       github.event_name == 'workflow_dispatch'
       || github.event.workflow_run.conclusion == 'success'
-    runs-on: macos-latest
-    permissions:
-      contents: write # create GitHub release
+    runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ env.RELEASE_SHA }}
-          persist-credentials: false
-
       - name: Calculate version
         id: version
         run: |
           CALVER=$(date -u +"%Y-%m-%d")
           echo "version=${CALVER}+${RELEASE_SHA::7}" >> "$GITHUB_OUTPUT"
 
+  # One binary per target: the frork CLI, and the runner `frork compile`
+  # appends a script to when building for that target.
+  build:
+    needs: version
+    strategy:
+      matrix:
+        include:
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: macos-latest, target: x86_64-apple-darwin }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+          persist-credentials: false
+
       - name: Build
         run: |
-          FRORK_VERSION="${STEPS_VERSION_OUTPUTS_VERSION}" cargo build --release -p frork-cli
-          tar -czf frork-aarch64-apple-darwin.tar.gz -C target/release frork
+          rustup target add "${TARGET}"
+          FRORK_VERSION="${VERSION}" cargo build --release -p frork-cli --target "${TARGET}"
+          tar -czf "frork-${TARGET}.tar.gz" -C "target/${TARGET}/release" frork
         env:
-          STEPS_VERSION_OUTPUTS_VERSION: ${{ steps.version.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.version.outputs.version }}
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: frork-${{ matrix.target }}
+          path: frork-${{ matrix.target }}.tar.gz
+
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create GitHub release
+    outputs:
+      version: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: frork-*
+          merge-multiple: true
 
       - name: Publish
         run: |
-          VERSION="${STEPS_VERSION_OUTPUTS_VERSION}"
           gh release create "v${VERSION}" \
+            --repo "${GITHUB_REPOSITORY}" \
             --title "v${VERSION}" \
             --generate-notes \
             --target "${RELEASE_SHA}" \
-            frork-aarch64-apple-darwin.tar.gz
+            frork-*.tar.gz
         env:
           GH_TOKEN: ${{ github.token }}
-          STEPS_VERSION_OUTPUTS_VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
 
   dotslash:
-    needs: build
+    needs: publish
     runs-on: ubuntu-latest
     permissions:
       contents: write # upload release assets
@@ -70,6 +101,6 @@ jobs:
         uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
         with:
           config: .github/dotslash-config.json
-          tag: v${{ needs.build.outputs.version }}
+          tag: v${{ needs.publish.outputs.version }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
