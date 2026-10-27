@@ -110,14 +110,7 @@ fn main() -> Result<()> {
 
     // A compiled script runs its payload in place of the CLI.
     if let Some(code) = payload()? {
-        let standalone = Standalone::parse();
-        let program = std::env::args().next().unwrap_or_default();
-        let args = [vec![program], standalone.args].concat();
-        return Ok(if standalone.apply {
-            run_lua(&code, &args, apply)
-        } else {
-            run_lua(&code, &args, check)
-        }?);
+        return run_standalone(&code);
     }
 
     let cli = Cli::parse();
@@ -157,6 +150,23 @@ fn run(command: &Commands) -> Result<()> {
                 .into_diagnostic()
         }
     }
+}
+
+fn run_standalone(code: &[u8]) -> Result<()> {
+    let Standalone {
+        apply: change,
+        args,
+    } = Standalone::parse();
+    let program = std::env::args().next().unwrap_or_default();
+    let handle_status =
+        move |declaration: Declaration, status: &Status, assertion: &dyn Assertion| {
+            if change {
+                apply(declaration, status, assertion)
+            } else {
+                check(declaration, status, assertion)
+            }
+        };
+    Ok(run_lua(code, &program, &args, handle_status)?)
 }
 
 fn payload() -> Result<Option<Vec<u8>>> {

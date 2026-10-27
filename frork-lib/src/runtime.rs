@@ -141,23 +141,26 @@ fn script_dir(script: &str) -> Option<&str> {
 }
 
 /// Runs Lua compiled ahead of time from a script, as a standalone binary
-/// does with its payload. `args` become Lua's `arg` table, `arg[0]` first.
+/// does with its payload. `program` and `args` become Lua's `arg` table, as
+/// `arg[0]` and from `arg[1]` on.
 pub fn run_lua(
     code: &[u8],
+    program: &str,
     args: &[String],
     handle_status: impl StatusHandler,
 ) -> Result<(), FrorkError> {
     let (lua, _frork_module, _fennel_module) = setup_lua(handle_status)?;
 
     let arg = bridge("create arg table", lua.create_table())?;
-    for (i, value) in (0..).zip(args) {
+    bridge("set arg[0]", arg.set(0, program))?;
+    for (i, value) in (1..).zip(args) {
         bridge("set arg", arg.set(i, value.as_str()))?;
     }
     bridge("set arg global", lua.globals().set("arg", arg))?;
 
     let result = lua.load(code).set_name("=script").exec();
     result.map_err(|source| FrorkError::ScriptRun {
-        script: args.first().cloned().unwrap_or_default(),
+        script: program.to_string(),
         source: source.into(),
     })
 }
@@ -506,10 +509,8 @@ mod tests {
     #[test]
     fn test_run_lua_runs_compiled_code_with_args() {
         let (seen, handler) = recorder();
-        let args = ["demo".to_string(), "/tmp".to_string()];
-
         let code = br#"require("frork").ok("directory", arg[1]) assert(arg[0] == "demo")"#;
-        run_lua(code, &args, handler).unwrap();
+        run_lua(code, "demo", &["/tmp".to_string()], handler).unwrap();
 
         assert_eq!(seen.borrow().as_slice(), ["ok Present: directory /tmp"]);
     }
@@ -518,7 +519,7 @@ mod tests {
     fn test_run_lua_reports_errors() {
         let (_seen, handler) = recorder();
 
-        let error = run_lua(b"error('boom')", &["demo".to_string()], handler).unwrap_err();
+        let error = run_lua(b"error('boom')", "demo", &[], handler).unwrap_err();
         assert!(matches!(&error, FrorkError::ScriptRun { script, .. } if script == "demo"));
         assert!(error.full_message().contains("boom"));
     }
