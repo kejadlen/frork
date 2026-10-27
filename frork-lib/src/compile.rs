@@ -13,9 +13,12 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
-use miette::Result;
-use miette::miette;
 use mlua::prelude::*;
+use xdg::BaseDirectories;
+
+use crate::error::CompileError;
+
+type Result<T> = std::result::Result<T, CompileError>;
 
 /// Where releases publish frork binaries, one `frork-<target>.tar.gz` per tag.
 pub const RELEASES_URL: &str = "https://github.com/kejadlen/frork/releases/download";
@@ -29,15 +32,18 @@ const TRAILER_LEN: u64 = 16;
 pub fn compile_lua(script: &str) -> Result<String> {
     let dir = Path::new(script).parent().and_then(Path::to_str);
     let dir = dir.filter(|d| !d.is_empty()).unwrap_or(".");
-    let source = fs_err::read_to_string(script).map_err(|e| miette!("{e}"))?;
+    let source = fs_err::read_to_string(script)?;
 
+    let lua_err = |e: LuaError| CompileError::Fennel {
+        script: script.to_string(),
+        message: e.to_string(),
+    };
     let lua = Lua::new();
     let fennel: LuaTable = lua
         .load(include_str!("../fennel-1.6.0.lua"))
         .set_name("=fennel")
         .eval()
-        .map_err(|e| miette!("Failed to load Fennel: {e}"))?;
-    let lua_err = |e: LuaError| miette!("Failed to compile {script}: {e}");
+        .map_err(lua_err)?;
     lua.register_module("fennel", &fennel).map_err(lua_err)?;
     for key in ["path", "macro-path"] {
         let default: String = fennel.get(key).map_err(lua_err)?;
@@ -105,32 +111,55 @@ pub fn payload(mut exe: impl Read + Seek) -> std::io::Result<Option<Vec<u8>>> {
     Ok(Some(payload))
 }
 
-/// The frork binary for `target` matching this frork's `version`, downloaded
-/// into `cache` from `releases_url` the first time it is needed.
-pub fn cached_runner(
-    cache: &Path,
-    releases_url: &str,
-    version: &str,
-    target: &str,
-) -> Result<PathBuf> {
-    if version.ends_with("-dev") {
-        return Err(miette!(
-            "{version} is a development build with no published binaries; pass --runner"
-        ));
-    }
-    let dir = cache.join(version).join(target);
-    if !dir.exists() {
-        let tag = format!("v{version}").replace('+', "%2B");
-        fetch(&format!("{releases_url}/{tag}/frork-{target}.tar.gz"), &dir)?;
-    }
-    Ok(dir.join("frork"))
+/// The frork binaries `frork compile` builds on for other targets, cached
+/// under frork's XDG cache directory as releases publish them.
+pub struct Runners {
+    dirs: BaseDirectories,
+    releases_url: String,
 }
 
-/// Downloads and unpacks a release archive into `dest`, which must not exist.
+impl Default for Runners {
+    fn default() -> Self {
+        Self::new(BaseDirectories::with_prefix("frork"), RELEASES_URL)
+    }
+}
+
+impl Runners {
+    pub fn new(dirs: BaseDirectories, releases_url: &str) -> Self {
+        Self {
+            dirs,
+            releases_url: releases_url.to_string(),
+        }
+    }
+
+    /// The frork binary for `target` matching this frork's `version`,
+    /// downloaded the first time it is needed.
+    pub fn get(&self, version: &str, target: &str) -> Result<PathBuf> {
+        if version.ends_with("-dev") {
+            return Err(CompileError::DevelopmentBuild {
+                version: version.to_string(),
+            });
+        }
+        let path = Path::new("runners")
+            .join(version)
+            .join(target)
+            .join("frork");
+        if let Some(runner) = self.dirs.find_cache_file(&path) {
+            return Ok(runner);
+        }
+        let runner = self.dirs.place_cache_file(&path)?;
+        let tag = format!("v{version}").replace('+', "%2B");
+        let url = format!("{}/{tag}/frork-{target}.tar.gz", self.releases_url);
+        fetch(&url, &runner)?;
+        Ok(runner)
+    }
+}
+
+/// Downloads a release archive and moves the `frork` in it to `dest`.
 fn fetch(url: &str, dest: &Path) -> Result<()> {
     let partial = dest.with_extension("partial");
     let archive = partial.join("frork.tar.gz");
-    fs_err::create_dir_all(&partial).map_err(|e| miette!("{e}"))?;
+    fs_err::create_dir_all(&partial)?;
     run(Command::new("curl")
         .args(["-fsSL", "-o"])
         .arg(&archive)
@@ -140,16 +169,19 @@ fn fetch(url: &str, dest: &Path) -> Result<()> {
         .arg(&archive)
         .arg("-C")
         .arg(&partial))?;
-    fs_err::remove_file(&archive).map_err(|e| miette!("{e}"))?;
-    fs_err::rename(&partial, dest).map_err(|e| miette!("{e}"))
+    fs_err::rename(partial.join("frork"), dest)?;
+    Ok(fs_err::remove_dir_all(&partial)?)
 }
 
 fn run(command: &mut Command) -> Result<()> {
-    let status = command.status().map_err(|e| miette!("{e}"))?;
+    let status = command.status()?;
     if status.success() {
         Ok(())
     } else {
-        Err(miette!("{command:?} failed with {status}"))
+        Err(CompileError::Command {
+            command: format!("{command:?}"),
+            status,
+        })
     }
 }
 
@@ -198,7 +230,7 @@ mod tests {
         fs_err::write(&script, "(local x").unwrap();
 
         let error = compile_lua(script.to_str().unwrap()).unwrap_err();
-        assert!(error.to_string().contains("Failed to compile"));
+        assert!(matches!(error, CompileError::Fennel { .. }));
     }
 
     #[test]
@@ -253,49 +285,66 @@ mod tests {
         archive
     }
 
+    /// Runners cached under `dir`, downloaded from releases under it too.
+    fn runners(dir: &Path) -> Runners {
+        let mut dirs = BaseDirectories::with_prefix("frork");
+        dirs.cache_home = Some(dir.join("cache"));
+        let url = format!("file://{}", dir.join("releases").display());
+        Runners::new(dirs, &url)
+    }
+
     #[test]
-    fn test_cached_runner_downloads_once_then_reuses() {
+    fn test_runners_download_once_then_reuse() {
         let dir = TempDir::new().unwrap();
         let version = "2026-10-20+abc1234";
         let target = "x86_64-unknown-linux-gnu";
         let archive = release(dir.path(), version, target);
-        let url = format!("file://{}", dir.path().join("releases").display());
-        let cache = dir.path().join("cache");
+        let runners = runners(dir.path());
 
-        let runner = cached_runner(&cache, &url, version, target).unwrap();
+        let runner = runners.get(version, target).unwrap();
+        assert!(runner.starts_with(dir.path().join("cache/frork/runners")));
         assert_eq!(fs_err::read_to_string(&runner).unwrap(), "runner");
+        assert!(!runner.with_extension("partial").exists());
 
         // A second lookup must not download: the archive is gone.
         fs_err::remove_file(&archive).unwrap();
-        let again = cached_runner(&cache, &url, version, target).unwrap();
+        let again = runners.get(version, target).unwrap();
         assert_eq!(again, runner);
         assert_eq!(fs_err::read_to_string(&again).unwrap(), "runner");
     }
 
     #[test]
-    fn test_cached_runner_reports_a_missing_release() {
+    fn test_runners_report_a_missing_release() {
         let dir = TempDir::new().unwrap();
-        let url = format!("file://{}", dir.path().display());
 
-        let result = cached_runner(
-            dir.path(),
-            &url,
-            "2026-01-01+0000000",
-            "x86_64-apple-darwin",
-        );
-        assert!(result.is_err());
+        let error = runners(dir.path())
+            .get("2026-01-01+0000000", "x86_64-apple-darwin")
+            .unwrap_err();
+        assert!(matches!(error, CompileError::Command { .. }));
     }
 
     #[test]
-    fn test_cached_runner_refuses_development_builds() {
-        let dir = TempDir::new().unwrap();
+    fn test_runners_need_a_cache_directory() {
+        let mut dirs = BaseDirectories::with_prefix("frork");
+        dirs.cache_home = None;
 
-        let error = cached_runner(dir.path(), RELEASES_URL, "2026-10-20+abc-dev", "x").unwrap_err();
+        let error = Runners::new(dirs, RELEASES_URL)
+            .get("2026-01-01+0000000", "x86_64-apple-darwin")
+            .unwrap_err();
+        assert!(matches!(error, CompileError::Io(_)));
+    }
+
+    #[test]
+    fn test_runners_refuse_development_builds() {
+        let error = Runners::default()
+            .get("2026-10-20+abc-dev", "x")
+            .unwrap_err();
         assert!(error.to_string().contains("--runner"));
     }
 
     #[test]
     fn test_run_reports_a_missing_program() {
-        assert!(run(&mut Command::new("/frork-does-not-exist")).is_err());
+        let error = run(&mut Command::new("/frork-does-not-exist")).unwrap_err();
+        assert!(matches!(error, CompileError::Io(_)));
     }
 }

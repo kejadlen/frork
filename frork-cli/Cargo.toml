@@ -16,7 +16,6 @@ fs-err = "*"
 # Not used directly: links a vendored Lua for frork-lib's engine.
 mlua = { version = "*", features = ["lua54", "vendored"] }
 tracing-subscriber = { version = "*", features = ["env-filter"] }
-xdg = "*"
 
 [dev-dependencies]
 assert_cmd = "*"

@@ -129,12 +129,7 @@ fn run(command: &Commands) -> Result<()> {
             let runner = match runner {
                 Some(runner) => runner.clone(),
                 None if target == TARGET => std::env::current_exe().into_diagnostic()?,
-                None => compile::cached_runner(
-                    &runner_cache()?,
-                    compile::RELEASES_URL,
-                    VERSION,
-                    target,
-                )?,
+                None => compile::Runners::default().get(VERSION, target)?,
             };
             let runner = fs_err::read(runner).into_diagnostic()?;
             let exe = compile::bundle(&runner, &compile::compile_lua(script)?);
@@ -148,13 +143,6 @@ fn run(command: &Commands) -> Result<()> {
 fn payload() -> Result<Option<Vec<u8>>> {
     let exe = fs_err::File::open(std::env::current_exe().into_diagnostic()?).into_diagnostic()?;
     compile::payload(exe).into_diagnostic()
-}
-
-fn runner_cache() -> Result<PathBuf> {
-    xdg::BaseDirectories::with_prefix("frork")
-        .get_cache_home()
-        .map(|cache| cache.join("runners"))
-        .ok_or_else(|| miette!("No cache directory: set XDG_CACHE_HOME or HOME"))
 }
 
 fn status(status: &Status, assertion: &dyn AssertionType) -> Result<()> {

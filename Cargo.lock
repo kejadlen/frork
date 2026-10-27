@@ -339,7 +339,6 @@ dependencies = [
  "predicates",
  "tempfile",
  "tracing-subscriber",
- "xdg",
 ]
 
 [[package]]
@@ -356,6 +355,7 @@ dependencies = [
  "thiserror",
  "tracing",
  "tracing-subscriber",
+ "xdg",
 ]
 
 [[package]]
