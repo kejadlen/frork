@@ -90,6 +90,28 @@ pub fn run_script(script: &str, handle_status: impl StatusHandler) -> Result<()>
     Ok(())
 }
 
+/// Runs Lua compiled ahead of time from a script, as a standalone binary
+/// does with its payload. `program` and `args` become Lua's `arg` table, as
+/// `arg[0]` and from `arg[1]` on.
+pub fn run_lua(
+    code: &[u8],
+    program: &str,
+    args: &[String],
+    handle_status: impl StatusHandler,
+) -> Result<()> {
+    let (lua, _frork_module, _fennel_module) = setup_lua(handle_status)?;
+    let lua_err = |e: LuaError| miette!("Failed to execute script: {e}");
+
+    let arg = lua.create_table().map_err(lua_err)?;
+    arg.set(0, program).map_err(lua_err)?;
+    for (i, value) in (1..).zip(args) {
+        arg.set(i, value.as_str()).map_err(lua_err)?;
+    }
+    lua.globals().set("arg", arg).map_err(lua_err)?;
+
+    lua.load(code).set_name("=script").exec().map_err(lua_err)
+}
+
 /// Builds the `frork` module table on an existing Lua state, for hosts that
 /// embed frork as a native module instead of using `setup_lua`.
 pub fn frork_module(lua: &Lua, handle_status: impl StatusHandler) -> LuaResult<LuaTable> {
@@ -313,6 +335,23 @@ mod tests {
         .unwrap();
 
         assert_eq!(seen.borrow().as_slice(), ["Ok: directory /tmp"]);
+    }
+
+    #[test]
+    fn test_run_lua_runs_compiled_code_with_args() {
+        let (seen, handler) = recorder();
+        let code = br#"require("frork").ok("directory", arg[1]) assert(arg[0] == "demo")"#;
+        run_lua(code, "demo", &["/tmp".to_string()], handler).unwrap();
+
+        assert_eq!(seen.borrow().as_slice(), ["Ok: directory /tmp"]);
+    }
+
+    #[test]
+    fn test_run_lua_reports_errors() {
+        let (_seen, handler) = recorder();
+
+        let error = run_lua(b"error('boom')", "demo", &[], handler).unwrap_err();
+        assert!(error.to_string().contains("boom"));
     }
 
     #[test]

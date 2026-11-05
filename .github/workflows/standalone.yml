@@ -1,0 +1,76 @@
+name: Standalone
+
+# Builds frork for Linux and macOS, compiles the example script for both with
+# `frork compile` on one Linux runner (the macOS binary is only copied, so no
+# cross-compiler is involved), then runs each binary on its own platform.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  runner:
+    strategy:
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: cargo build --release -p frork-cli
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: frork-${{ matrix.target }}
+          path: target/release/frork
+
+  compile:
+    needs: runner
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: frork-*
+      - name: Compile the example for Linux and macOS
+        run: |
+          frork=frork-x86_64-unknown-linux-gnu/frork
+          chmod +x "$frork"
+          mkdir dist
+          "$frork" compile examples/standalone/main.fnl -o dist/demo-linux
+          "$frork" compile examples/standalone/main.fnl -o dist/demo-macos \
+            --target aarch64-apple-darwin --runner frork-aarch64-apple-darwin/frork
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: demo
+          path: dist
+
+  run:
+    needs: compile
+    strategy:
+      matrix:
+        include:
+          - { os: ubuntu-latest, exe: demo-linux }
+          - { os: macos-latest, exe: demo-macos }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: demo
+      - name: Satisfy, then check everything is ok
+        run: |
+          chmod +x "./${MATRIX_EXE}"
+          export FRORK_DEMO_ROOT="$RUNNER_TEMP/demo"
+          "./${MATRIX_EXE}" --satisfy
+          "./${MATRIX_EXE}" | tee status.txt
+          ! grep missing status.txt
+          test -L "$FRORK_DEMO_ROOT/settings.txt"
+          cat "$FRORK_DEMO_ROOT/settings.txt"
+        env:
+          MATRIX_EXE: ${{ matrix.exe }}

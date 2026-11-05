@@ -29,12 +29,15 @@ jobs:
           CALVER=$(date -u +"%Y-%m-%d")
           echo "version=${CALVER}+${RELEASE_SHA::7}" >> "$GITHUB_OUTPUT"
 
+  # One binary per target: the frork CLI, and the runner `frork compile`
+  # appends a script to when building for that target.
   build:
     needs: version
     strategy:
       matrix:
         include:
           - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: macos-latest, target: x86_64-apple-darwin }
           - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
     runs-on: ${{ matrix.os }}

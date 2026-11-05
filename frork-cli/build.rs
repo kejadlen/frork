@@ -10,6 +10,9 @@ fn main() {
         format!("{date}+{change}-dev")
     });
     println!("cargo:rustc-env=FRORK_VERSION={version}");
+    // The default target for `frork compile`: the platform frork runs on.
+    let target = std::env::var("TARGET").unwrap_or_default();
+    println!("cargo:rustc-env=FRORK_TARGET={target}");
 }
 
 fn cmd(program: &str, args: &[&str]) -> String {

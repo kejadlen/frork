@@ -1,11 +1,15 @@
+use std::path::PathBuf;
+
 use clap::CommandFactory;
 use clap::Parser;
 use clap::Subcommand;
 use clap_complete::Shell;
 use frork_lib::assertions::AssertionType;
 use frork_lib::assertions::Status;
+use frork_lib::compile;
 use frork_lib::report;
 use frork_lib::runtime::run_code;
+use frork_lib::runtime::run_lua;
 use frork_lib::runtime::run_script;
 use miette::IntoDiagnostic as _;
 use miette::Result;
@@ -16,6 +20,7 @@ use tracing_subscriber::prelude::*;
 
 /// CalVer, set by build.rs — the crate version is not what ships.
 const VERSION: &str = env!("FRORK_VERSION");
+const TARGET: &str = env!("FRORK_TARGET");
 
 #[derive(Parser)]
 #[command(name = "frork", version = VERSION)]
@@ -31,10 +36,45 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Check { code: String },
-    Do { code: String },
-    Status { script: String },
-    Satisfy { script: String },
+    Check {
+        code: String,
+    },
+    Do {
+        code: String,
+    },
+    Status {
+        script: String,
+    },
+    Satisfy {
+        script: String,
+    },
+    /// Compile a script into a standalone executable.
+    Compile {
+        script: String,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// The Rust target triple to build for.
+        #[arg(long, default_value = TARGET)]
+        target: String,
+        /// A frork binary for the target to build on, instead of this one
+        /// (for the host) or the one published with this release.
+        #[arg(long)]
+        runner: Option<PathBuf>,
+    },
+}
+
+/// The arguments of a compiled script, which runs in place of the CLI.
+#[derive(Parser)]
+#[command(name = "frork", version = VERSION)]
+#[command(about = "Reports the assertions built into this script")]
+struct Standalone {
+    /// Install missing assertions instead of only reporting them.
+    #[arg(long)]
+    satisfy: bool,
+
+    /// Passed to the script in Lua's `arg` table, after `--`.
+    #[arg(last = true)]
+    args: Vec<String>,
 }
 
 fn main() -> Result<()> {
@@ -45,6 +85,11 @@ fn main() -> Result<()> {
         .with(fmt::layer())
         .with(EnvFilter::from_default_env())
         .init();
+
+    // A compiled script runs its payload in place of the CLI.
+    if let Some(code) = compile::own_payload()? {
+        return run_standalone(&code);
+    }
 
     let cli = Cli::parse();
 
@@ -67,7 +112,36 @@ fn run(command: &Commands) -> Result<()> {
         Commands::Do { code } => run_code(code, satisfy),
         Commands::Status { script } => run_script(script, status),
         Commands::Satisfy { script } => run_script(script, satisfy),
+        Commands::Compile {
+            script,
+            output,
+            target,
+            runner,
+        } => {
+            let runner = match runner {
+                Some(runner) => Some(runner.clone()),
+                None if target == TARGET => None,
+                None => Some(compile::Runners::default().get(VERSION, target)?),
+            };
+            Ok(compile::compile(script, runner.as_deref(), output)?)
+        }
     }
+}
+
+fn run_standalone(code: &[u8]) -> Result<()> {
+    let Standalone {
+        satisfy: install,
+        args,
+    } = Standalone::parse();
+    let program = std::env::args().next().unwrap_or_default();
+    let handle_status = move |state: &Status, assertion: &dyn AssertionType| {
+        if install {
+            satisfy(state, assertion)
+        } else {
+            status(state, assertion)
+        }
+    };
+    run_lua(code, &program, &args, handle_status)
 }
 
 fn status(status: &Status, assertion: &dyn AssertionType) -> Result<()> {
