@@ -24,7 +24,7 @@ bin/coverage               # grcov coverage report and threshold gate
   dotslash-config.json     # DotSlash launcher config for releases
   workflows/
     ci.yml                 # fmt + clippy + coverage
-    release.yml            # CalVer release on CI success, per-target binaries, DotSlash
+    release.yml            # CalVer release on CI success: macOS + Linux tarballs, DotSlash
     standalone.yml         # Compiles the example for Linux/macOS, runs each
 frork-cli/
   Cargo.toml               # Binary crate — the `frork` CLI; vendors Lua
@@ -89,7 +89,7 @@ just install                # cargo install --locked --path frork-cli
 
 `frork-cli/build.rs` sets a `FRORK_VERSION` env var that `--version` reports. CI passes CalVer (`YYYY-MM-DD+SHORT_SHA`); local builds substitute the jj change ID and append `-dev`, so a development binary is never mistaken for a release. The crate version in `Cargo.toml` is not what ships.
 
-Releases run on green main builds and attach a macOS aarch64 tarball plus a [DotSlash](https://dotslash-cli.com) launcher.
+Releases run on green main builds and attach tarballs for aarch64/x86_64 macOS and Linux, each built on a native runner, plus a [DotSlash](https://dotslash-cli.com) launcher.
 
 ## Coverage
 
