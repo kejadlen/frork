@@ -16,6 +16,23 @@ pub enum FrorkError {
     Lua(String),
 }
 
+/// Why `frork compile` could not build a standalone binary.
+#[derive(Error, Diagnostic, Debug)]
+pub enum CompileError {
+    // A String, like FrorkError::Lua: LuaError is not Send.
+    #[error("Failed to compile {script}: {message}")]
+    Fennel { script: String, message: String },
+    #[error("{version} is a development build with no published binaries; pass --runner")]
+    DevelopmentBuild { version: String },
+    #[error("{command} failed with {status}")]
+    Command {
+        command: String,
+        status: std::process::ExitStatus,
+    },
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
 impl From<LuaError> for FrorkError {
     fn from(err: LuaError) -> Self {
         match err {

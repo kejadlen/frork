@@ -12,6 +12,7 @@
 )]
 
 pub mod assertions;
+pub mod compile;
 pub mod error;
 pub mod registry;
 pub mod report;
