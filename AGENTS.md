@@ -47,7 +47,7 @@ frork-lib/
     runtime.rs             # Lua/Fennel setup, the frork module, run_code/run_script
     utils.rs               # Shell helpers, path expansion, Lua bindings
   tests/
-    property.rs            # Hegel property tests (chomp, upgrade prompt)
+    property.rs            # Hegel property tests across the library's public API
 frork-lua/
   Cargo.toml               # Lua C module crate (cdylib + staticlib)
   src/lib.rs               # mlua module exposing frork-lib to Lua
