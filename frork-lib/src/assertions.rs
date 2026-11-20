@@ -137,7 +137,9 @@ impl std::fmt::Display for Symlink {
 
 impl AssertionType for Symlink {
     fn status(&self) -> Result<Status> {
-        if !Path::new(&self.target).exists() {
+        // Unlike `Path::exists`, this doesn't follow the link, so a link to a
+        // source that doesn't exist yet still counts as present.
+        if fs::symlink_metadata(&self.target).is_err() {
             return Ok(Status::Missing);
         }
 

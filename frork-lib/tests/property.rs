@@ -23,6 +23,7 @@ use frork_lib::assertions::Git;
 use frork_lib::assertions::LuaAssertion;
 use frork_lib::assertions::LuaAssertionType;
 use frork_lib::assertions::Status;
+use frork_lib::assertions::Symlink;
 use frork_lib::error::FrorkError;
 use frork_lib::registry::Registry;
 use frork_lib::report;
@@ -580,6 +581,25 @@ fn directory_install_satisfies_any_nested_path(tc: TestCase) {
     assert!(matches!(directory.status().unwrap(), Status::Missing));
     directory.install().unwrap();
     assert!(matches!(directory.status().unwrap(), Status::Ok));
+}
+
+#[hegel::test]
+fn symlink_install_satisfies_status_whether_or_not_the_source_exists(tc: TestCase) {
+    let root = TempDir::new().unwrap();
+    let sources = root.path().join("sources");
+    fs::create_dir(&sources).unwrap();
+    let source = sources.join(tc.draw(path_component()));
+    if tc.draw(gs::booleans()) {
+        fs::write(&source, "").unwrap();
+    }
+    let symlink = Symlink {
+        target: expanded(&root.path().join("link")),
+        source: expanded(&source),
+    };
+
+    assert!(matches!(symlink.status().unwrap(), Status::Missing));
+    symlink.install().unwrap();
+    assert!(matches!(symlink.status().unwrap(), Status::Ok));
 }
 
 /// A remote URL git will store and hand back unchanged: no control
