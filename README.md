@@ -41,6 +41,15 @@ cargo install --locked --path frork-cli
 
 Or use `just install`.
 
+With Nix, install the CLI from the flake:
+
+```
+nix profile install github:kejadlen/frork
+```
+
+The `frork-lua` package builds the Lua module, with `frork.so` in
+`lib/lua/5.4` for Lua's `package.cpath`.
+
 ## Built-in assertion types
 
 | Type | Arguments | Description |
@@ -91,6 +100,9 @@ module, both a C dynamic library and a static one that Fennel's
 `--compile-binary --native-module` can link into a standalone binary.
 
 ## Development
+
+`nix develop` provides the Rust toolchain and the tools that `just`
+needs, including grcov.
 
 ```
 cargo check -p frork-cli -p frork-lib

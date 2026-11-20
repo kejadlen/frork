@@ -9,6 +9,8 @@ frork is a Fennel-based configuration management tool inspired by [bork](https:/
 ```
 Cargo.toml                # Workspace root (frork-cli, frork-lib, frork-lua)
 Cargo.lock
+flake.nix                  # Dev shell, plus frork and frork-lua packages
+flake.lock
 README.md
 justfile                   # Local dev tasks (fmt, clippy, coverage, mutants, install)
 bin/coverage               # grcov coverage report and threshold gate
@@ -100,10 +102,11 @@ Coverage regions land on their own line in two cases worth knowing, since both l
 - A `?` on a multi-line call puts the error path on the closing `)?;` line. Bind the arguments first so the call fits on one line.
 - A lazily-formatted `debug!` argument may never be counted where it sits. Bind it to a local before the macro.
 
-Two workspace-specific details the script depends on:
+Three workspace-specific details the script depends on:
 
 - `LLVM_PROFILE_FILE` must be an absolute path. Cargo runs test binaries with the working directory set to the package root, so a relative path scatters `.profraw` files into each crate's own `target/` and grcov silently reports 0%.
 - `--keep-only 'frork-*/src/**'` scopes the report to workspace crates. A bare `src/**` matches nothing here, and `*/src/**` also picks up dependency sources from the cargo registry.
+- `GRCOV_LLVM_PATH`, when set, reaches grcov as `--llvm-path`. Without it, grcov only finds rustup's `llvm-tools` component, which nixpkgs' rustc lacks, so the Nix dev shell points it at the LLVM that rustc was built with.
 
 ## Architecture notes
 
