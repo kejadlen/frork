@@ -46,10 +46,7 @@ pub fn run_script(script: &str, handle_status: impl StatusHandler) -> Result<()>
     let (lua, _frork_module, fennel_module) = setup_lua(handle_status)?;
 
     // Add script directory to Lua and Fennel search paths.
-    let script_path = std::path::Path::new(script);
-    if let Some(script_dir) = script_path.parent()
-        && let Some(script_dir_str) = script_dir.to_str()
-    {
+    if let Some(script_dir_str) = script_dir(script) {
         let package_table: LuaTable = lua
             .globals()
             .get("package")
@@ -95,6 +92,15 @@ pub fn run_script(script: &str, handle_status: impl StatusHandler) -> Result<()>
         .map_err(|e| miette!("Failed to execute script: {e}"))?;
 
     Ok(())
+}
+
+/// The directory a script names, if any. A bare filename's parent is empty,
+/// and the default search paths already cover `./`.
+fn script_dir(script: &str) -> Option<&str> {
+    std::path::Path::new(script)
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .and_then(std::path::Path::to_str)
 }
 
 /// Builds the `frork` module table on an existing Lua state, for hosts that
@@ -387,6 +393,14 @@ mod tests {
         run_script(script.to_str().unwrap(), handler).unwrap();
 
         assert_eq!(seen.borrow().as_slice(), ["Ok: directory /tmp"]);
+    }
+
+    #[test]
+    fn test_script_dir_skips_a_bare_filename() {
+        assert_eq!(script_dir("main.fnl"), None);
+        assert_eq!(script_dir(""), None);
+        assert_eq!(script_dir("conf/main.fnl"), Some("conf"));
+        assert_eq!(script_dir("/etc/frork/main.fnl"), Some("/etc/frork"));
     }
 
     #[test]
