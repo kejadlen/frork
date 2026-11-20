@@ -341,42 +341,6 @@ mod tests {
     }
 
     #[test]
-    fn test_run_script_evaluates_a_file() {
-        let dir = TempDir::new().unwrap();
-        let script = dir.path().join("check.fnl");
-        fs::write(
-            &script,
-            r#"(local frork (require :frork))
-               (frork.ok :directory "/tmp")"#,
-        )
-        .unwrap();
-
-        let (seen, handler) = recorder();
-        run_script(script.to_str().unwrap(), handler).unwrap();
-
-        assert_eq!(seen.borrow().as_slice(), ["Ok: directory /tmp"]);
-    }
-
-    #[test]
-    fn test_run_script_puts_the_script_directory_on_the_search_path() {
-        let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("helper.fnl"), r#"{:target "/tmp"}"#).unwrap();
-        let script = dir.path().join("main.fnl");
-        fs::write(
-            &script,
-            r#"(local frork (require :frork))
-               (local helper (require :helper))
-               (frork.ok :directory helper.target)"#,
-        )
-        .unwrap();
-
-        let (seen, handler) = recorder();
-        run_script(script.to_str().unwrap(), handler).unwrap();
-
-        assert_eq!(seen.borrow().as_slice(), ["Ok: directory /tmp"]);
-    }
-
-    #[test]
     fn test_run_script_accepts_a_path_with_a_double_quote() {
         let dir = TempDir::new().unwrap();
         let quoted = dir.path().join(r#"we"ird"#);

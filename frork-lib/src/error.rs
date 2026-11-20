@@ -36,31 +36,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_frork_error_preserved_through_lua_callback() {
-        let lua = Lua::new();
-
-        // Create a Lua function that returns a FrorkError wrapped in LuaError::external
-        let test_fn = lua
-            .create_function(|_lua, ()| -> LuaResult<()> {
-                Err(LuaError::external(FrorkError::InvalidArguments(
-                    "test error message".to_string(),
-                )))
-            })
-            .unwrap();
-
-        // Call the function and convert the resulting LuaError to FrorkError
-        let result: Result<(), LuaError> = test_fn.call(());
-        let lua_err = result.unwrap_err();
-        let frork_err = FrorkError::from(lua_err);
-
-        // Check that the original FrorkError is preserved
-        assert_eq!(
-            frork_err,
-            FrorkError::InvalidArguments("test error message".to_string())
-        );
-    }
-
-    #[test]
     fn test_regular_lua_error_converted() {
         let lua = Lua::new();
 

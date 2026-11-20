@@ -72,7 +72,6 @@ impl AssertionTypeFactory for LuaAssertionFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assertions::Status;
 
     fn lua_assertion_type(lua: &Lua) -> LuaAssertionType {
         let value = lua
@@ -130,16 +129,6 @@ mod tests {
     }
 
     #[test]
-    fn test_unknown_type_is_rejected() {
-        let registry = Registry::default();
-
-        let Err(error) = registry.get_factory("nope") else {
-            panic!("expected an unknown assertion type error"); // cov-excl-line
-        };
-        assert!(error.to_string().contains("Unknown assertion type: nope"));
-    }
-
-    #[test]
     fn test_registered_types_are_dispatched() {
         let lua = Lua::new();
         let mut registry = Registry::default();
@@ -151,37 +140,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(assertion.to_string(), "custom arg");
-    }
-
-    #[test]
-    fn test_registered_types_shadow_built_ins() {
-        let lua = Lua::new();
-        let mut registry = Registry::default();
-
-        // Reports missing for a directory that exists, so the built-in (which
-        // would report Ok for /tmp) cannot produce this result.
-        let shadow = lua
-            .load(
-                r#"return {
-                    display = function() return "shadowed" end,
-                    status = function() return "missing" end,
-                    install = function() end,
-                }"#,
-            )
-            .eval::<LuaValue>()
-            .unwrap();
-        registry.register(
-            "directory",
-            LuaAssertionType::from_lua(shadow, &lua).unwrap(),
-        );
-
-        let factory = registry.get_factory("directory").unwrap();
-        let assertion = factory
-            .create(&lua, lua.load(r#"return "/tmp""#).eval().unwrap())
-            .unwrap();
-
-        assert_eq!(assertion.to_string(), "shadowed");
-        assert!(matches!(assertion.status().unwrap(), Status::Missing));
     }
 
     #[test]

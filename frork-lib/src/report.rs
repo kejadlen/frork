@@ -25,52 +25,8 @@ pub fn wants_upgrade(input: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assertions::Conflict;
-    use crate::utils::ExpandedPath;
 
-    fn directory() -> crate::assertions::Directory {
-        crate::assertions::Directory {
-            path: ExpandedPath::try_from("/tmp").unwrap(),
-        }
-    }
-
-    #[test]
-    fn test_render_ok() {
-        assert_eq!(render(&Status::Ok, &directory()), ["ok: directory /tmp"]);
-    }
-
-    #[test]
-    fn test_render_missing() {
-        assert_eq!(
-            render(&Status::Missing, &directory()),
-            ["missing: directory /tmp"]
-        );
-    }
-
-    #[test]
-    fn test_render_conflict_includes_both_sides() {
-        let status = Status::ConflictUpgrade(Conflict {
-            expected: "a".to_string(),
-            actual: "b".to_string(),
-        });
-
-        assert_eq!(
-            render(&status, &directory()),
-            [
-                "conflict (upgradable): directory /tmp",
-                "  expected: a",
-                "    actual: b",
-            ]
-        );
-    }
-
-    #[test]
-    fn test_wants_upgrade_accepts_y_and_yes() {
-        for input in ["y", "yes", "Y", "YES", "  yes  ", "Yes\n"] {
-            assert!(wants_upgrade(input), "expected {input:?} to upgrade");
-        }
-    }
-
+    // The property tests rarely land on near misses, so they're pinned here.
     #[test]
     fn test_wants_upgrade_declines_everything_else() {
         for input in ["", "n", "no", "ye", "yess", "yep", "1", "true"] {

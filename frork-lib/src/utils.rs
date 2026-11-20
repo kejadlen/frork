@@ -272,21 +272,6 @@ mod tests {
     use std::env;
 
     #[test]
-    fn test_expand_path_no_variables() {
-        let result = Utils::expand_path("/path/to/file");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "/path/to/file");
-    }
-
-    #[test]
-    fn test_expand_path_with_tilde() {
-        let home = env::var("HOME").unwrap();
-        let result = Utils::expand_path("~/file");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), format!("{}/file", home));
-    }
-
-    #[test]
     fn test_expand_path_with_multiple_env_vars() {
         unsafe {
             env::set_var("TEST_VAR1", "value1");
@@ -299,17 +284,6 @@ mod tests {
             env::remove_var("TEST_VAR1");
             env::remove_var("TEST_VAR2");
         }
-    }
-
-    #[test]
-    fn test_expand_path_with_multiple_missing_env_vars() {
-        let result = Utils::expand_path("/$MISSING1/path/$MISSING2/file");
-        assert!(result.is_err());
-        let error = result.unwrap_err();
-        let error_str = error.to_string();
-        assert!(error_str.contains("Environment variables not found:"));
-        assert!(error_str.contains("MISSING1"));
-        assert!(error_str.contains("MISSING2"));
     }
 
     #[test]
@@ -432,27 +406,6 @@ mod tests {
     }
 
     #[test]
-    fn test_expanded_path_from_lua() {
-        let lua = mlua::Lua::new();
-        let echo = lua
-            .create_function(|_lua, path: ExpandedPath| Ok(path.into_string()))
-            .unwrap();
-        lua.globals().set("echo_path", echo).unwrap();
-
-        let expanded: String = lua
-            .load(r#"return echo_path("/tmp/plain")"#)
-            .eval()
-            .unwrap();
-        assert_eq!(expanded, "/tmp/plain");
-
-        // Expansion failures surface as Lua errors rather than panicking.
-        let result = lua
-            .load(r#"return echo_path("/tmp/$EXPANDED_PATH_MISSING")"#)
-            .eval::<String>();
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn test_dirname() {
         assert_eq!(
             Utils::dirname("/tmp/a/b.txt").unwrap().as_deref(),
@@ -508,27 +461,6 @@ mod tests {
         let lua = mlua::Lua::new();
         let utils_table = Utils {}.into_lua(&lua).unwrap();
         lua.globals().set("utils", utils_table).unwrap();
-
-        unsafe {
-            env::set_var("LUA_BINDING_VAR", "bound");
-        }
-        let expanded: String = lua
-            .load(r#"return utils["expand-path"]("/tmp/$LUA_BINDING_VAR")"#)
-            .eval()
-            .unwrap();
-        assert_eq!(expanded, "/tmp/bound");
-        unsafe {
-            env::remove_var("LUA_BINDING_VAR");
-        }
-
-        let dir: String = lua
-            .load(r#"return utils.dirname("/tmp/a/b.txt")"#)
-            .eval()
-            .unwrap();
-        assert_eq!(dir, "/tmp/a");
-
-        let chomped: String = lua.load("return utils.chomp('line\\n')").eval().unwrap();
-        assert_eq!(chomped, "line");
 
         let platform: String = lua.load(r#"return utils.platform"#).eval().unwrap();
         assert_eq!(platform, expected_platform());

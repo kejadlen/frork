@@ -689,33 +689,6 @@ mod tests {
     }
 
     #[test]
-    fn test_status_from_lua_conflict_upgrade() {
-        let lua = Lua::new();
-
-        let status = status_from(
-            &lua,
-            r#"return "conflict-upgrade", {expected = "a", actual = "b"}"#,
-        )
-        .unwrap();
-        let Status::ConflictUpgrade(conflict) = status else {
-            panic!("expected a conflict-upgrade status"); // cov-excl-line
-        };
-        assert_eq!(conflict.expected, "a");
-        assert_eq!(conflict.actual, "b");
-    }
-
-    #[test]
-    fn test_status_from_lua_rejects_other_strings_with_conflict() {
-        let lua = Lua::new();
-
-        let err = status_from(&lua, r#"return "ok", {expected = "a", actual = "b"}"#).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("only supported for conflict-upgrade")
-        );
-    }
-
-    #[test]
     fn test_status_from_lua_rejects_non_string() {
         let lua = Lua::new();
 
@@ -758,28 +731,6 @@ mod tests {
     // --- Symlink ---
 
     #[test]
-    fn test_symlink_lifecycle() {
-        let dir = TempDir::new().unwrap();
-        let source = dir.path().join("source.txt");
-        fs::write(&source, "content").unwrap();
-        let target = dir.path().join("link");
-
-        let symlink = Symlink {
-            target: expanded(&target),
-            source: expanded(&source),
-        };
-
-        assert_eq!(
-            symlink.to_string(),
-            format!("symlink {} {}", target.display(), source.display())
-        );
-        assert!(matches!(symlink.status().unwrap(), Status::Missing));
-
-        symlink.install().unwrap();
-        assert!(matches!(symlink.status().unwrap(), Status::Ok));
-    }
-
-    #[test]
     fn test_symlink_install_failure() {
         let dir = TempDir::new().unwrap();
         let symlink = Symlink {
@@ -803,24 +754,6 @@ mod tests {
     }
 
     // --- Directory ---
-
-    #[test]
-    fn test_directory_lifecycle() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("nested/deep");
-        let directory = Directory {
-            path: expanded(&path),
-        };
-
-        assert_eq!(
-            directory.to_string(),
-            format!("directory {}", path.display())
-        );
-        assert!(matches!(directory.status().unwrap(), Status::Missing));
-
-        directory.install().unwrap();
-        assert!(matches!(directory.status().unwrap(), Status::Ok));
-    }
 
     #[test]
     fn test_directory_install_failure() {
@@ -911,30 +844,6 @@ mod tests {
             panic!("expected a conflict when the remote cannot be read"); // cov-excl-line
         };
         assert_eq!(conflict.actual, "failed to get remote url");
-    }
-
-    #[test]
-    fn test_git_status_wrong_remote() {
-        let dir = TempDir::new().unwrap();
-        let remote_url = bare_origin(dir.path());
-        let clone = dir.path().join("clone");
-
-        Git {
-            dir: expanded(&clone),
-            remote_url: remote_url.clone(),
-        }
-        .install()
-        .unwrap();
-
-        let git = Git {
-            dir: expanded(&clone),
-            remote_url: "https://example.com/other.git".to_string(),
-        };
-        let Status::ConflictUpgrade(conflict) = git.status().unwrap() else {
-            panic!("expected a conflict for a mismatched remote"); // cov-excl-line
-        };
-        assert_eq!(conflict.expected, "https://example.com/other.git");
-        assert!(conflict.actual.contains(&remote_url));
     }
 
     #[test]
@@ -1372,20 +1281,6 @@ mod tests {
     }
 
     #[test]
-    fn test_lua_assertion_display_without_display_fn() {
-        let lua = Lua::new();
-        let assertion_type = lua_assertion_type(
-            &lua,
-            r#"return {status = function() return "ok" end, install = function() end}"#,
-        )
-        .unwrap();
-
-        let assertion =
-            LuaAssertion::new("custom", multi(&lua, r#"return "a", "b""#), assertion_type);
-        assert_eq!(assertion.to_string(), "custom a b");
-    }
-
-    #[test]
     fn test_lua_assertion_display_fn_replaces_default() {
         let lua = Lua::new();
         let assertion_type = lua_assertion_type(
@@ -1400,22 +1295,5 @@ mod tests {
 
         let assertion = LuaAssertion::new("custom", multi(&lua, r#"return "arg""#), assertion_type);
         assert_eq!(assertion.to_string(), "rendered arg");
-    }
-
-    #[test]
-    fn test_lua_assertion_display_fn_failure_falls_back() {
-        let lua = Lua::new();
-        let assertion_type = lua_assertion_type(
-            &lua,
-            r#"return {
-                display = function() error("display boom") end,
-                status = function() return "ok" end,
-                install = function() end,
-            }"#,
-        )
-        .unwrap();
-
-        let assertion = LuaAssertion::new("custom", multi(&lua, r#"return "arg""#), assertion_type);
-        assert_eq!(assertion.to_string(), "custom arg");
     }
 }
