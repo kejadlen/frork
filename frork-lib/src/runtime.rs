@@ -80,12 +80,19 @@ pub fn run_script(script: &str, handle_status: impl StatusHandler) -> Result<()>
             .map_err(|e| miette!("Failed to set Fennel path: {e}"))?;
     }
 
-    lua.load(format!(
-        r#"require("fennel").install().dofile("{}")"#,
-        script
-    ))
-    .exec()
-    .map_err(|e| miette!("Failed to execute script: {e}"))?;
+    let install_fn: LuaFunction = fennel_module
+        .get("install")
+        .map_err(|e| miette!("Failed to get fennel.install: {e}"))?;
+    install_fn
+        .call::<()>(())
+        .map_err(|e| miette!("Failed to install the Fennel searcher: {e}"))?;
+
+    let dofile_fn: LuaFunction = fennel_module
+        .get("dofile")
+        .map_err(|e| miette!("Failed to get fennel.dofile: {e}"))?;
+    dofile_fn
+        .call::<()>(script)
+        .map_err(|e| miette!("Failed to execute script: {e}"))?;
 
     Ok(())
 }
@@ -354,6 +361,25 @@ mod tests {
             r#"(local frork (require :frork))
                (local helper (require :helper))
                (frork.ok :directory helper.target)"#,
+        )
+        .unwrap();
+
+        let (seen, handler) = recorder();
+        run_script(script.to_str().unwrap(), handler).unwrap();
+
+        assert_eq!(seen.borrow().as_slice(), ["Ok: directory /tmp"]);
+    }
+
+    #[test]
+    fn test_run_script_accepts_a_path_with_a_double_quote() {
+        let dir = TempDir::new().unwrap();
+        let quoted = dir.path().join(r#"we"ird"#);
+        fs::create_dir(&quoted).unwrap();
+        let script = quoted.join("check.fnl");
+        fs::write(
+            &script,
+            r#"(local frork (require :frork))
+               (frork.ok :directory "/tmp")"#,
         )
         .unwrap();
 
