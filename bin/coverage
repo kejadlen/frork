@@ -27,7 +27,9 @@ main() {
     cargo test -p frork-cli -p frork-lib --quiet
 
     local report
+    # Without --llvm-path, grcov only finds rustup's llvm-tools component.
     report=$(grcov "$TARGET_DIR/profraw" \
+        ${GRCOV_LLVM_PATH:+--llvm-path "$GRCOV_LLVM_PATH"} \
         --binary-path "$TARGET_DIR/debug/" \
         --source-dir . \
         --output-types covdir \
