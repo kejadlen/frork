@@ -14,11 +14,8 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
 
-/// CalVer, set by build.rs — the crate version is not what ships.
-const VERSION: &str = env!("FRORK_VERSION");
-
 #[derive(Parser)]
-#[command(name = "frork", version = VERSION)]
+#[command(name = "frork", version = frork_lib::VERSION)]
 #[command(about = "A Fennel-based configuration management tool")]
 struct Cli {
     /// Generate shell completions and exit.

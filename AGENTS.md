@@ -29,7 +29,6 @@ bin/coverage               # grcov coverage report and threshold gate
     release.yml            # CalVer release on CI success: macOS + Linux tarballs, DotSlash
 frork-cli/
   Cargo.toml               # Binary crate — the `frork` CLI; vendors Lua
-  build.rs                 # Sets FRORK_VERSION
   src/
     bin/frork/
       main.rs              # Entrypoint — clap CLI and status rendering only
@@ -37,6 +36,7 @@ frork-cli/
     cli.rs                 # Integration tests via assert_cmd
 frork-lib/
   Cargo.toml               # The engine, shared by frork-cli and frork-lua
+  build.rs                 # Sets FRORK_VERSION
   fennel-1.6.0.lua         # Vendored Fennel compiler
   src/
     lib.rs                 # Library root — re-exports modules
@@ -87,7 +87,7 @@ just install                # cargo install --locked --path frork-cli
 
 ## Versioning and release
 
-`frork-cli/build.rs` sets a `FRORK_VERSION` env var that `--version` reports. CI passes CalVer (`YYYY-MM-DD+SHORT_SHA`); local builds substitute the jj change ID and append `-dev`, so a development binary is never mistaken for a release. The crate version in `Cargo.toml` is not what ships.
+`frork-lib/build.rs` sets a `FRORK_VERSION` env var that `frork-lib::VERSION` is built from — both `frork --version` and the Lua module's `VERSION` report it. CI passes CalVer (`YYYY-MM-DD+SHORT_SHA`); local builds substitute the jj change ID and append `-dev`, so a development binary is never mistaken for a release. The crate version in `Cargo.toml` is not what ships.
 
 Releases run on green main builds and attach tarballs for aarch64 macOS and aarch64/x86_64 Linux, each built on a native runner, plus a [DotSlash](https://dotslash-cli.com) launcher.
 

@@ -1,6 +1,10 @@
 use std::process::Command;
 
 fn main() {
+    // Any rerun-if directive disables the rerun-on-package-change default, so
+    // watch src to keep the dev fallback's date and change id fresh.
+    println!("cargo:rerun-if-env-changed=FRORK_VERSION");
+    println!("cargo:rerun-if-changed=src");
     let version = std::env::var("FRORK_VERSION").unwrap_or_else(|_| {
         let date = cmd("date", &["-u", "+%Y-%m-%d"]);
         let change = cmd(

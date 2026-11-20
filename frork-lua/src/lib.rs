@@ -23,6 +23,6 @@ fn frork(lua: &Lua) -> LuaResult<LuaTable> {
         Ok(())
     };
     let exports = frork_module(lua, handler)?;
-    exports.set("VERSION", env!("CARGO_PKG_VERSION"))?;
+    exports.set("VERSION", frork_lib::VERSION)?;
     Ok(exports)
 }

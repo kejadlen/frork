@@ -17,3 +17,6 @@ pub mod registry;
 pub mod report;
 pub mod runtime;
 pub mod utils;
+
+/// CalVer set by build.rs — the crate version is not what ships.
+pub const VERSION: &str = env!("FRORK_VERSION");
