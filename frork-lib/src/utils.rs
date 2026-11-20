@@ -172,14 +172,16 @@ impl Utils {
         // text. Non-UTF-8 output would be unusable there either way.
         #[allow(clippy::disallowed_methods)]
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let status = output
-            .status
-            .code()
-            .ok_or_else(|| miette!("Command '{}' terminated by signal", cmd))?;
+        let code = output.status.code();
+        let status = code.ok_or_else(|| miette!("Command '{}' terminated by signal", cmd))?;
         let trimmed = stdout.trim();
         debug!(
             "Command '{}' completed with status {}, stdout: {}",
-            cmd, status, trimmed
+            // The subscriber test exercises these, but nightly maps the
+            // lazy format regions to a counter that never fires.
+            cmd,
+            status,
+            trimmed // cov-excl-line
         );
         Ok((stdout, status))
     }

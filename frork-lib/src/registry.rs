@@ -118,12 +118,10 @@ mod tests {
         ];
 
         for (name, args, expected) in cases {
-            let factory = registry
-                .get_factory(name)
-                .unwrap_or_else(|e| panic!("{name} did not resolve: {e}"));
-            let assertion = factory
-                .create(&lua, args)
-                .unwrap_or_else(|e| panic!("{name} failed to build: {e}"));
+            let factory = registry.get_factory(name);
+            let factory = factory.unwrap_or_else(|e| panic!("{name} did not resolve: {e}"));
+            let assertion = factory.create(&lua, args);
+            let assertion = assertion.unwrap_or_else(|e| panic!("{name} failed to build: {e}"));
             assert_eq!(assertion.to_string(), expected, "for type {name}");
         }
     }

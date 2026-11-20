@@ -100,7 +100,7 @@ Unimplemented stubs are excluded rather than counted: the `--excl-line` pattern 
 Coverage regions land on their own line in two cases worth knowing, since both look like untestable code and are neither:
 
 - A `?` on a multi-line call puts the error path on the closing `)?;` line. Bind the arguments first so the call fits on one line.
-- A lazily-formatted `debug!` argument may never be counted where it sits. Bind it to a local before the macro.
+- A lazily-formatted `debug!` argument may never be counted where it sits. Bind it to a local before the macro — and if the arguments are already plain locals, nightly still maps phantom zero-count regions onto the args line, so mark that line `cov-excl-line` (the subscriber test in `utils.rs` does exercise them at runtime).
 
 Three workspace-specific details the script depends on:
 

@@ -23,16 +23,13 @@ impl<T> StatusHandler for T where T: Fn(&Status, &dyn AssertionType) -> Result<(
 pub fn run_code(code: &str, handle_status: impl StatusHandler) -> Result<()> {
     let (lua, frork_module, fennel_module) = setup_lua(handle_status)?;
 
-    let ok_fn: LuaFunction = frork_module
-        .get("ok")
-        .map_err(|e| miette!("Failed to get frork.ok: {e}"))?;
-    lua.globals()
-        .set("ok", ok_fn)
-        .map_err(|e| miette!("Failed to set ok global: {e}"))?;
+    let ok_fn: LuaResult<LuaFunction> = frork_module.get("ok");
+    let ok_fn = ok_fn.map_err(|e| miette!("Failed to get frork.ok: {e}"))?;
+    let set_ok = lua.globals().set("ok", ok_fn);
+    set_ok.map_err(|e| miette!("Failed to set ok global: {e}"))?;
 
-    let eval_fn: LuaFunction = fennel_module
-        .get("eval")
-        .map_err(|e| miette!("Failed to get fennel.eval: {e}"))?;
+    let eval_fn: LuaResult<LuaFunction> = fennel_module.get("eval");
+    let eval_fn = eval_fn.map_err(|e| miette!("Failed to get fennel.eval: {e}"))?;
 
     eval_fn
         .call::<()>(code)
@@ -47,46 +44,38 @@ pub fn run_script(script: &str, handle_status: impl StatusHandler) -> Result<()>
 
     // Add script directory to Lua and Fennel search paths.
     if let Some(script_dir_str) = script_dir(script) {
-        let package_table: LuaTable = lua
-            .globals()
-            .get("package")
-            .map_err(|e| miette!("Failed to get package table: {e}"))?;
+        let package: LuaResult<LuaTable> = lua.globals().get("package");
+        let package_table = package.map_err(|e| miette!("Failed to get package table: {e}"))?;
 
         // Add to Lua search path.
-        let current_path: String = package_table
-            .get("path")
-            .map_err(|e| miette!("Failed to get current Lua path: {e}"))?;
+        let path: LuaResult<String> = package_table.get("path");
+        let current_path = path.map_err(|e| miette!("Failed to get current Lua path: {e}"))?;
         let new_path = format!(
             "{};{}/?.lua;{}/?/init.lua",
             current_path, script_dir_str, script_dir_str
         );
-        package_table
-            .set("path", new_path)
-            .map_err(|e| miette!("Failed to set Lua path: {e}"))?;
+        let set_path = package_table.set("path", new_path);
+        set_path.map_err(|e| miette!("Failed to set Lua path: {e}"))?;
 
         // Add to Fennel search path.
-        let current_fennel_path: String = fennel_module
-            .get("path")
-            .unwrap_or_else(|_| "./?.fnl;./?/init.fnl".to_string());
+        let fennel_path: LuaResult<String> = fennel_module.get("path");
+        let current_fennel_path =
+            fennel_path.unwrap_or_else(|_| "./?.fnl;./?/init.fnl".to_string());
         let new_fennel_path = format!(
             "{};{}/?.fnl;{}/?/init.fnl",
             current_fennel_path, script_dir_str, script_dir_str
         );
-        fennel_module
-            .set("path", new_fennel_path)
-            .map_err(|e| miette!("Failed to set Fennel path: {e}"))?;
+        let fennel_set = fennel_module.set("path", new_fennel_path);
+        fennel_set.map_err(|e| miette!("Failed to set Fennel path: {e}"))?;
     }
 
-    let install_fn: LuaFunction = fennel_module
-        .get("install")
-        .map_err(|e| miette!("Failed to get fennel.install: {e}"))?;
-    install_fn
-        .call::<()>(())
-        .map_err(|e| miette!("Failed to install the Fennel searcher: {e}"))?;
+    let install_fn: LuaResult<LuaFunction> = fennel_module.get("install");
+    let install_fn = install_fn.map_err(|e| miette!("Failed to get fennel.install: {e}"))?;
+    let installed = install_fn.call::<()>(());
+    installed.map_err(|e| miette!("Failed to install the Fennel searcher: {e}"))?;
 
-    let dofile_fn: LuaFunction = fennel_module
-        .get("dofile")
-        .map_err(|e| miette!("Failed to get fennel.dofile: {e}"))?;
+    let dofile_fn: LuaResult<LuaFunction> = fennel_module.get("dofile");
+    let dofile_fn = dofile_fn.map_err(|e| miette!("Failed to get fennel.dofile: {e}"))?;
     dofile_fn
         .call::<()>(script)
         .map_err(|e| miette!("Failed to execute script: {e}"))?;
@@ -117,22 +106,19 @@ fn setup_lua(handle_status: impl StatusHandler) -> Result<(Lua, LuaTable, LuaTab
     let lua = Lua::new();
 
     let fennel_code = include_str!("../fennel-1.6.0.lua");
-    let fennel_module: LuaTable = lua
-        .load(fennel_code)
-        .eval()
-        .map_err(|e| miette!("Failed to load Fennel: {e}"))?;
-    lua.register_module("fennel", &fennel_module)
-        .map_err(|e| miette!("Failed to register fennel module: {e}"))?;
+    let loaded = lua.load(fennel_code).eval();
+    let fennel_module: LuaTable = loaded.map_err(|e| miette!("Failed to load Fennel: {e}"))?;
+    let registered = lua.register_module("fennel", &fennel_module);
+    registered.map_err(|e| miette!("Failed to register fennel module: {e}"))?;
 
-    let frork_value = Frork::new(handle_status, lua.clone())
-        .into_lua(&lua)
-        .map_err(|e| miette!("Failed to create frork table: {e}"))?;
+    let lua_value = Frork::new(handle_status, lua.clone()).into_lua(&lua);
+    let frork_value = lua_value.map_err(|e| miette!("Failed to create frork table: {e}"))?;
     let LuaValue::Table(frork_table) = frork_value else {
         // Frork::into_lua always returns a table.
         unreachable!();
     };
-    lua.register_module("frork", &frork_table)
-        .map_err(|e| miette!("Failed to register frork module: {e}"))?;
+    let registered = lua.register_module("frork", &frork_table);
+    registered.map_err(|e| miette!("Failed to register frork module: {e}"))?;
 
     Ok((lua, frork_table, fennel_module))
 }
@@ -170,21 +156,16 @@ impl<F: StatusHandler> Frork<F> {
         }
 
         let mut args_iter = args.into_iter();
-        let assertion_type = args_iter
-            .next()
-            .and_then(|v| v.to_string().ok())
-            .ok_or_else(|| LuaError::external(FrorkError::MissingAssertionType))?;
+        let name = args_iter.next().and_then(|v| v.to_string().ok());
+        let assertion_type =
+            name.ok_or_else(|| LuaError::external(FrorkError::MissingAssertionType))?;
 
         let assertion_args: LuaMultiValue = args_iter.collect();
 
-        let factory = self
-            .registry
-            .borrow()
-            .get_factory(&assertion_type)
-            .map_err(LuaError::external)?;
-        let assertion = factory
-            .create(&self.lua, assertion_args)
-            .map_err(LuaError::external)?;
+        let factory = self.registry.borrow().get_factory(&assertion_type);
+        let factory = factory.map_err(LuaError::external)?;
+        let assertion = factory.create(&self.lua, assertion_args);
+        let assertion = assertion.map_err(LuaError::external)?;
         let status = assertion.status().map_err(LuaError::external)?;
 
         (self.handle_status)(&status, assertion.as_ref()).map_err(LuaError::external)?;
