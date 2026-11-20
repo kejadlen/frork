@@ -441,6 +441,19 @@ const NO_DISPLAY: &str =
     r#"return {status = function() return "ok" end, install = function() end}"#;
 
 #[hegel::test]
+fn lua_assertion_displays_its_name_and_args_by_default(tc: TestCase) {
+    let name = tc.draw(text());
+    let args = tc.draw(gs::vecs(text()).max_size(4));
+    let lua = Lua::new();
+    let assertion = LuaAssertion::new(&name, lua_strings(&lua, &args), lua_type(&lua, NO_DISPLAY));
+
+    let words: Vec<&str> = std::iter::once(name.as_str())
+        .chain(args.iter().map(String::as_str))
+        .collect();
+    assert_eq!(assertion.to_string(), words.join(" "));
+}
+
+#[hegel::test]
 fn lua_assertion_falls_back_to_the_default_display_when_display_fails(tc: TestCase) {
     let name = tc.draw(text());
     let args = tc.draw(gs::vecs(text()).max_size(4));

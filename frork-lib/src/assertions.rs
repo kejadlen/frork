@@ -592,13 +592,14 @@ impl LuaAssertion {
 impl std::fmt::Display for LuaAssertion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let default_display = || {
-            let args_str = self
+            let args = self
                 .args
                 .iter()
-                .map(|v| v.to_string().unwrap_or_else(|_| "?".to_string()))
+                .map(|v| v.to_string().unwrap_or_else(|_| "?".to_string()));
+            std::iter::once(self.name.clone())
+                .chain(args)
                 .collect::<Vec<_>>()
-                .join(" ");
-            format!("{} {}", self.name, args_str)
+                .join(" ")
         };
 
         if let Some(ref display_fn) = self.assertion_type.display_fn {
