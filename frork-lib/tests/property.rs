@@ -83,7 +83,7 @@ fn references_a_variable(s: &str) -> bool {
 }
 
 fn expanded(path: &Path) -> ExpandedPath {
-    ExpandedPath::try_from(path.to_str().unwrap()).unwrap()
+    path.to_str().unwrap().parse().unwrap()
 }
 
 fn lua_strings(lua: &Lua, values: &[String]) -> LuaMultiValue {
@@ -306,8 +306,7 @@ fn expanded_path_entry_points_agree_with_expand_path(tc: TestCase) {
     let lua_path = LuaValue::String(lua.create_string(&path).unwrap());
     let results = [
         ExpandedPath::new(&path).ok(),
-        ExpandedPath::try_from(path.as_str()).ok(),
-        ExpandedPath::try_from(path.clone()).ok(),
+        path.parse::<ExpandedPath>().ok(),
         ExpandedPath::from_lua(lua_path, &lua).ok(),
     ];
     for result in results {

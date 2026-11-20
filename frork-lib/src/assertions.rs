@@ -662,7 +662,7 @@ mod tests {
     }
 
     fn expanded(path: &Path) -> ExpandedPath {
-        ExpandedPath::try_from(path.to_str().unwrap()).unwrap()
+        path.to_str().unwrap().parse().unwrap()
     }
 
     // --- Status / Conflict ---
@@ -1005,7 +1005,7 @@ mod tests {
 
     fn brew_bundle(runner: FakeRunner) -> BrewBundle<FakeRunner> {
         BrewBundle {
-            brewfile: ExpandedPath::try_from("/tmp/Brewfile").unwrap(),
+            brewfile: "/tmp/Brewfile".parse().unwrap(),
             runner,
         }
     }

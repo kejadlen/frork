@@ -7,6 +7,7 @@ use std::ffi::OsStr;
 use std::ops::Deref;
 use std::path::Path;
 use std::process::Command;
+use std::str::FromStr;
 use std::sync::LazyLock;
 use tracing::debug;
 
@@ -35,18 +36,10 @@ impl From<ExpandedPath> for String {
     }
 }
 
-impl TryFrom<String> for ExpandedPath {
-    type Error = miette::Report;
+impl FromStr for ExpandedPath {
+    type Err = miette::Report;
 
-    fn try_from(path: String) -> Result<Self> {
-        Self::new(&path)
-    }
-}
-
-impl TryFrom<&str> for ExpandedPath {
-    type Error = miette::Report;
-
-    fn try_from(path: &str) -> Result<Self> {
+    fn from_str(path: &str) -> Result<Self> {
         Self::new(path)
     }
 }
@@ -389,11 +382,7 @@ mod tests {
         assert_eq!(path.to_string(), "/tmp/expanded");
 
         assert_eq!(
-            ExpandedPath::try_from("/tmp/$EXPANDED_PATH_VAR").unwrap(),
-            path
-        );
-        assert_eq!(
-            ExpandedPath::try_from("/tmp/$EXPANDED_PATH_VAR".to_string()).unwrap(),
+            "/tmp/$EXPANDED_PATH_VAR".parse::<ExpandedPath>().unwrap(),
             path
         );
 
