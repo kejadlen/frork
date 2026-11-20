@@ -497,8 +497,8 @@ pub struct Debug {
 impl FromLuaMulti for Debug {
     fn from_lua_multi(args: LuaMultiValue, lua: &Lua) -> LuaResult<Self> {
         let table = LuaTable::from_lua_multi(args, lua)?;
-        let status_fn: Option<LuaFunction> = table.get("status").ok();
-        let install_fn: Option<LuaFunction> = table.get("install").ok();
+        let status_fn: Option<LuaFunction> = table.get("status")?;
+        let install_fn: Option<LuaFunction> = table.get("install")?;
         Ok(Self {
             status_fn,
             install_fn,
@@ -557,10 +557,10 @@ impl FromLua for LuaAssertionType {
     fn from_lua(value: LuaValue, lua: &Lua) -> LuaResult<Self> {
         let table = LuaTable::from_lua(value, lua)?;
 
-        let display_fn: Option<LuaFunction> = table.get("display").ok();
+        let display_fn: Option<LuaFunction> = table.get("display")?;
         let status_fn: LuaFunction = table.get("status")?;
         let install_fn: LuaFunction = table.get("install")?;
-        let upgrade_fn: Option<LuaFunction> = table.get("upgrade").ok();
+        let upgrade_fn: Option<LuaFunction> = table.get("upgrade")?;
 
         Ok(Self {
             display_fn,
@@ -1225,6 +1225,18 @@ mod tests {
         assert!(error.to_string().contains("Debug install function failed"));
     }
 
+    #[test]
+    fn test_debug_rejects_non_function_fields() {
+        let lua = Lua::new();
+
+        for script in [
+            r#"return {status = "missing"}"#,
+            r#"return {install = "nothing"}"#,
+        ] {
+            assert!(Debug::from_lua_multi(multi(&lua, script), &lua).is_err());
+        }
+    }
+
     // --- Lua assertion types ---
 
     fn lua_assertion_type(lua: &Lua, script: &str) -> LuaResult<LuaAssertionType> {
@@ -1245,6 +1257,18 @@ mod tests {
         assert!(assertion_type.upgrade_fn.is_none());
 
         assert!(lua_assertion_type(&lua, r#"return {install = function() end}"#).is_err());
+    }
+
+    #[test]
+    fn test_lua_assertion_type_rejects_non_function_optional_fields() {
+        let lua = Lua::new();
+
+        for field in ["display", "upgrade"] {
+            let script = format!(
+                r#"return {{status = function() return "ok" end, install = function() end, {field} = "oops"}}"#
+            );
+            assert!(lua_assertion_type(&lua, &script).is_err());
+        }
     }
 
     #[test]
