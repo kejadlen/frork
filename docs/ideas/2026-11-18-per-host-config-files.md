@@ -27,28 +27,53 @@ and every built-in `upgrade` is `todo!()`.
 - **Identity is a plain symlink.** With no override, the real path
   links straight to the base file, so edits flow back into the repo
   exactly as they do today.
-- **An override projects.** frork encodes the data to an out file and
-  links the real path to that. Drift shows up as a key-level diff to
-  fold back into the Fennel.
-- **Generating data is just Fennel.** frork supplies `encode` and
-  `decode` per format, not a transform language.
+- **An override writes a file and links to it.** That is two existing
+  kinds of assertion, `:file` and `:symlink`, not a new one. Drift on
+  the written file shows up as a diff to fold back into the Fennel.
+- **Generating data is just Fennel.** frork encodes and decodes by
+  file extension; there is no transform language.
 - **`:settings` is a separate tool** for files that apps rewrite
   themselves, patching only the keys frork manages.
 - **No saved state.** Everything is derived from the repo and the
   files on disk.
 
-Rule of thumb: if you'd commit the whole file, use `:layered`. If
-you'd only commit some of its keys, use `:settings`.
+Rule of thumb: if you'd commit the whole file, use `:file` and
+`:symlink`. If you'd only commit some of its keys, use `:settings`.
 
-## `:layered`: base plus host override
+## `:file` plus `:symlink`: base plus host override
+
+With no override, nothing new is needed:
 
 ```fennel
-(local {: ok} (require :frork))
-
-(ok :layered "~/.config/foo.toml"
-  {:base "foo/base.toml"
-   :override (. overrides (utils.hostname))})   ; nil means identity
+(ok :symlink "~/.config/foo.toml" "~/.dotfiles/foo/base.toml")
 ```
+
+With one, write the file and link to it:
+
+```fennel
+(local {: ok : read} (require :frork))
+
+(ok :file "~/.dotfiles/out/foo.toml" (work (read "foo/base.toml")))
+(ok :symlink "~/.config/foo.toml" "~/.dotfiles/out/foo.toml")
+```
+
+`:file` asserts that a path has some content, and picks what to do
+from what it's given:
+
+| Content             | Written as                                                        |
+|---------------------|-------------------------------------------------------------------|
+| string              | Raw bytes                                                         |
+| table               | Encoded by the target's extension                                 |
+| table plus `{:format :ini}` | Encoded as that format, for files like `gitconfig`        |
+| table, no known format | Error, rather than a guess                                     |
+
+```fennel
+(ok :file "~/.dotfiles/out/gitconfig" data {:format :ini})
+(ok :file "~/.dotfiles/out/motd" "hello\n")
+```
+
+`read` is the mirror image: it decodes a file by its extension, or by
+`{:format ...}`, so base files need no format named either.
 
 An override is a function or a table to merge in:
 
@@ -58,35 +83,51 @@ An override is a function or a table to merge in:
    :laptop (fn [cfg] (doto cfg (tset :theme :light)))})
 ```
 
+A small Fennel helper can wrap the pair. It is a function, not an
+assertion type, so status only ever shows `file` and `symlink`:
+
+```fennel
+(layered "~/.config/foo.toml" "foo/base.toml" (. overrides (utils.hostname)))
+;; nil override: just the symlink to the base
+;; otherwise:    a :file in out/ plus a :symlink to it
+```
+
 A convention could load `overrides/<hostname>.fnl` next to the script,
 so adding a host override is just adding a file.
 
-| Case        | On disk                                              | Where edits go                      |
-|-------------|------------------------------------------------------|-------------------------------------|
-| No override | `~/.config/foo.toml` → `foo/base.toml`               | Straight into the base file         |
-| Override    | `~/.config/foo.toml` → `out/foo.toml`, written from `encode(override(decode(base)))` | The out file; status reports drift |
+| Case        | On disk                                                       | Where edits go                      |
+|-------------|---------------------------------------------------------------|-------------------------------------|
+| No override | `~/.config/foo.toml` → `foo/base.toml`                        | Straight into the base file         |
+| Override    | `~/.config/foo.toml` → `out/foo.toml`, written by `:file`     | The out file; status reports drift  |
 
 The identity case links the base file itself. It never decodes and
 re-encodes, so frork doesn't reformat a file nobody overrode.
 
+Encoding has to be deterministic. Lua tables have no key order, so a
+naive encode could shuffle keys between runs and cause spurious
+conflicts and git noise. Encoding with sorted keys fixes that, but it
+also means a base file's own key order doesn't survive an override.
+
 ### Drift and the diff loop
 
-Status compares the decoded out file with the data the code produces.
-The diff is key-level, and `merge` provenance points at the Fennel
-line that set the value:
+When the file on disk differs from the content, `:file` reports a
+conflict with a diff. For a format frork knows, the diff is key-level,
+and `merge` provenance points at the Fennel line that set the value.
+A string falls back to a line diff.
 
 ```
-conflict (upgradable): layered ~/.config/foo.toml
+conflict (upgradable): file ~/.dotfiles/out/foo.toml
   editor.font-size: code 15, file 16  (overrides.work, dotfiles.fnl:12)
 ```
 
 1. `satisfy` asks `Upgrade? [y/N]`.
-2. Yes discards the edit and re-projects.
+2. Yes discards the edit and rewrites the file.
 3. No keeps the edit. Update the Fennel until the diff is empty, and
    status returns to ok.
 
-If an app's atomic save replaced the symlink with a regular file, that
-file is what gets diffed, and upgrade restores the link.
+If an app's atomic save replaced the symlink with a regular file, the
+`:symlink` assertion catches it. Folding that file's contents back is
+still an open question.
 
 ## `:settings`: patching files apps own
 
@@ -124,8 +165,8 @@ missing file is created as an empty document of its format.
 
 ## Implementation sketch
 
-`:layered` needs only `frork.<fmt>` encode and decode per format, plus
-the symlink and file logic. `:settings` needs more: edits apply to each
+`:file` and `read` need only encode and decode per format, chosen by
+extension, plus a key-level diff over decoded values. `:settings` needs more: edits apply to each
 format's native document, and only comparisons go through a neutral
 `Value`, so each format's crate keeps comments and layout where it can.
 
@@ -163,7 +204,12 @@ trait Format {
 - Two assertions on one file: merged, or applied in order?
 - Where out files live: a gitignored dir in the repo (leaning this
   way, edits sit next to the code) or XDG state.
-- Name: `:layered` or `:derived`.
+- Name for the patch-in-place type: `:settings`, `:keys`, `:entries`
+  or `:contains`?
+- Name and home for the `layered` helper: part of `frork`, or left to
+  scripts?
+- When an atomic save replaces the symlink, should frork diff the
+  regular file against the content before restoring the link?
 - Should frork load `overrides/<hostname>.fnl` by convention, or leave
   lookup to the script?
 
@@ -179,3 +225,5 @@ trait Format {
 | Full XSLT or a selector DSL                    | Overkill; Fennel tables plus `where` cover it                   |
 | Writing edits back into Fennel automatically   | Arbitrary Fennel can't be inverted; the diff loop covers it     |
 | Projecting every file, even with no override   | Reformats files nobody overrode and loses native edit-back      |
+| A `:layered` assertion type                    | A name for a mechanism, not a thing on disk; `:file` plus `:symlink` already say it |
+| An `:override` option on `:symlink`            | The link would point somewhere other than its stated source     |
