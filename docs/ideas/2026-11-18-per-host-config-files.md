@@ -32,13 +32,13 @@ and every built-in `upgrade` is `todo!()`.
   the written file shows up as a diff to fold back into the Fennel.
 - **Generating data is just Fennel.** frork encodes and decodes by
   file extension; there is no transform language.
-- **`:settings` is a separate tool** for files that apps rewrite
+- **`:patch` is a separate tool** for files that apps rewrite
   themselves, patching only the keys frork manages.
 - **No saved state.** Everything is derived from the repo and the
   files on disk.
 
 Rule of thumb: if you'd commit the whole file, use `:file` and
-`:symlink`. If you'd only commit some of its keys, use `:settings`.
+`:symlink`. If you'd only commit some of its keys, use `:patch`.
 
 ## `:file` plus `:symlink`: base plus host override
 
@@ -129,31 +129,31 @@ If an app's atomic save replaced the symlink with a regular file, the
 `:symlink` assertion catches it. Folding that file's contents back is
 still an open question.
 
-## `:settings`: patching files apps own
+## `:patch`: patching files apps own
 
 For files you only partly own, such as editor settings the app
 rewrites, frork patches the keys it manages in place and leaves the
 rest alone.
 
 ```fennel
-(local {: ok : settings} (require :frork))
-(local {: delete : includes : where : merge} settings)
+(local {: ok : patch} (require :frork))
+(local {: delete : includes : where : merge} patch)
 
-(ok :settings "~/.config/zed/settings.json"
+(ok :patch "~/.config/zed/settings.json"
   {:vim_mode true
    :buffer_font_size 14
    :theme {:dark "One Dark"}
    :features {:copilot delete}})
 ```
 
-`(ok :settings path managed ?opts)` picks the format from the
+`(ok :patch path managed ?opts)` picks the format from the
 extension; `{:format :toml}` overrides it for files like `.gitconfig`.
 
 | Value in `managed`             | Meaning                                    |
 |--------------------------------|--------------------------------------------|
 | scalar                         | Key is set to this value                   |
 | nested table                   | Recurse; keys not mentioned are left alone |
-| `settings.delete`              | Key must be absent                         |
+| `patch.delete`              | Key must be absent                         |
 | sequential table               | List is exactly these elements             |
 | `(includes [:a :b])`           | List contains at least these               |
 | `(where {:name "prod"} {...})` | Apply edits to list elements that match    |
@@ -166,7 +166,7 @@ missing file is created as an empty document of its format.
 ## Implementation sketch
 
 `:file` and `read` need only encode and decode per format, chosen by
-extension, plus a key-level diff over decoded values. `:settings` needs more: edits apply to each
+extension, plus a key-level diff over decoded values. `:patch` needs more: edits apply to each
 format's native document, and only comparisons go through a neutral
 `Value`, so each format's crate keeps comments and layout where it can.
 
@@ -193,7 +193,7 @@ trait Format {
 ## Open questions
 
 - Lua writes an empty map and an empty list both as `{}`. Explicit
-  `(settings.empty-map)` and `(settings.empty-list)`?
+  `(patch.empty-map)` and `(patch.empty-list)`?
 - INI is strings only and TOML has dates. Compare loosely as strings
   to start?
 - KDL nodes carry positional args as well as props. A reserved `:args`
@@ -204,8 +204,6 @@ trait Format {
 - Two assertions on one file: merged, or applied in order?
 - Where out files live: a gitignored dir in the repo (leaning this
   way, edits sit next to the code) or XDG state.
-- Name for the patch-in-place type: `:settings`, `:keys`, `:entries`
-  or `:contains`?
 - Name and home for the `layered` helper: part of `frork`, or left to
   scripts?
 - When an atomic save replaces the symlink, should frork diff the
