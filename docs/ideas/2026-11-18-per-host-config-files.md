@@ -92,8 +92,8 @@ An override is a function or a table to merge in:
    :laptop (fn [cfg] (doto cfg (tset :theme :light)))})
 ```
 
-A small Fennel helper can wrap the pair. It is a function, not an
-assertion type, so status only ever shows `file` and `symlink`:
+A small Fennel helper can wrap the pair. It is a function, not a
+provider, so status only ever shows `file` and `symlink`:
 
 ```fennel
 (layered "~/.config/foo.toml" "foo/base.toml" (. overrides (utils.hostname)))
@@ -115,25 +115,25 @@ re-encodes, so frork doesn't reformat a file nobody overrode.
 
 Encoding has to be deterministic. Lua tables have no key order, so a
 naive encode could shuffle keys between runs and cause spurious
-conflicts and git noise. Encoding with sorted keys fixes that, but it
+drift and git noise. Encoding with sorted keys fixes that, but it
 also means a base file's own key order doesn't survive an override.
 
 ### Drift and the diff loop
 
-When the file on disk differs from the content, `:file` reports a
-conflict with a diff. For a format frork knows, the diff is key-level,
+When the file on disk differs from the content, `:file` reports
+`drifted` with a diff. For a format frork knows, the diff is key-level,
 and `merge` provenance points at the Fennel line that set the value.
 A string falls back to a line diff.
 
 ```
-conflict (upgradable): file ~/.dotfiles/out/foo.toml
+ok file ~/.dotfiles/out/foo.toml: drifted
   editor.font-size: code 15, file 16  (overrides.work, dotfiles.fnl:12)
 ```
 
-1. `satisfy` asks `Upgrade? [y/N]`.
+1. `apply` asks `Update <display>? [y/N]`.
 2. Yes discards the edit and rewrites the file.
 3. No keeps the edit. Update the Fennel until the diff is empty, and
-   status returns to ok.
+   the line loses its `drifted` suffix.
 
 Out files are tracked, not ignored, on a private branch that never
 gets pushed (in jj, `git.private-commits`). The last render is then a
@@ -185,10 +185,10 @@ extension; `{:format :toml}` overrides it for files like `.gitconfig`.
 | `(includes [:a :b])`           | List contains at least these               |
 | `(where {:name "prod"} {...})` | Apply edits to list elements that match    |
 
-Status rolls up per file, with a line per offending key. Any conflict
-makes the file a conflict; otherwise a missing key or file makes it
-missing. Install and upgrade both patch the managed keys, and a
-missing file is created as an empty document of its format.
+Status rolls up per file, with a line per offending key. Any drift
+makes the file drifted; otherwise an absent key or file makes it
+absent. Create and update both patch the managed keys, and an
+absent file is created as an empty document of its format.
 
 ## Implementation sketch
 
@@ -244,5 +244,5 @@ trait Format {
 | Full XSLT or a selector DSL                    | Overkill; Fennel tables plus `where` cover it                   |
 | Writing edits back into Fennel automatically   | Arbitrary Fennel can't be inverted; the diff loop covers it     |
 | Projecting every file, even with no override   | Reformats files nobody overrode and loses native edit-back      |
-| A `:layered` assertion type                    | A name for a mechanism, not a thing on disk; `:file` plus `:symlink` already say it |
+| A `:layered` provider                          | A name for a mechanism, not a thing on disk; `:file` plus `:symlink` already say it |
 | An `:override` option on `:symlink`            | The link would point somewhere other than its stated source     |

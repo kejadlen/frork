@@ -2,7 +2,7 @@
 
 A Fennel-based configuration management tool inspired by
 [bork](https://bork.sh/). Describe the desired state of your system in
-declarative Fennel scripts, then check status or satisfy each assertion.
+declarative Fennel scripts, then check each assertion or apply it.
 
 ## Quick start
 
@@ -15,22 +15,39 @@ declarative Fennel scripts, then check status or satisfy each assertion.
 (ok :git "~/src/project" "https://github.com/user/project.git")
 ```
 
-Check what's missing:
+Check what's absent:
 
 ```
-$ frork status dotfiles.fnl
-ok: symlink /Users/alpha/.gitconfig /Users/alpha/.dotfiles/.gitconfig
-missing: directory /Users/alpha/.config/nvim
-missing: git /Users/alpha/src/project https://github.com/user/project.git
+$ frork check dotfiles.fnl
+ok symlink /Users/alpha/.gitconfig /Users/alpha/.dotfiles/.gitconfig
+ok directory /Users/alpha/.config/nvim: absent
+ok git /Users/alpha/src/project https://github.com/user/project.git: absent
 ```
 
-Fix everything:
+Create everything that's absent:
 
 ```
-$ frork satisfy dotfiles.fnl
-ok: symlink /Users/alpha/.gitconfig /Users/alpha/.dotfiles/.gitconfig
-ok: directory /Users/alpha/.config/nvim
-ok: git /Users/alpha/src/project https://github.com/user/project.git
+$ frork apply dotfiles.fnl
+ok symlink /Users/alpha/.gitconfig /Users/alpha/.dotfiles/.gitconfig
+ok directory /Users/alpha/.config/nvim: absent
+ok directory /Users/alpha/.config/nvim
+ok git /Users/alpha/src/project https://github.com/user/project.git: absent
+ok git /Users/alpha/src/project https://github.com/user/project.git
+```
+
+A line with no suffix holds. When something is there but different,
+the line ends in `drifted` and shows what differs, and `apply` asks
+before updating it:
+
+```
+$ frork apply dotfiles.fnl
+ok symlink /Users/alpha/.gitconfig /Users/alpha/.dotfiles/.gitconfig
+ok directory /Users/alpha/.config/nvim
+ok git /Users/alpha/src/project https://github.com/user/project.git: drifted
+  expected: https://github.com/user/project.git
+    actual: current remote: https://example.com/other.git
+Update git /Users/alpha/src/project https://github.com/user/project.git? [y/N] n
+kept: git /Users/alpha/src/project https://github.com/user/project.git
 ```
 
 ## Installation
@@ -50,9 +67,12 @@ nix profile install github:kejadlen/frork
 The `frork-lua` package builds the Lua module, with `frork.so` in
 `lib/lua/5.4` for Lua's `package.cpath`.
 
-## Built-in assertion types
+## Built-in providers
 
-| Type | Arguments | Description |
+Each `ok` line is an assertion, and its first argument names the
+provider that knows how to inspect and change that sort of thing.
+
+| Provider | Arguments | Description |
 |------|-----------|-------------|
 | `symlink` | target, source | Ensure a symlink exists pointing to the source |
 | `directory` | path | Ensure a directory exists |
@@ -62,34 +82,59 @@ The `frork-lua` package builds the Lua module, with `frork.so` in
 
 Paths support `~` and `$ENV_VAR` expansion.
 
-## Custom assertion types
+## Writing a provider
 
-Register new assertion types from Fennel using `frork.register`:
+Add a provider from Fennel using `frork.provide`:
 
 ```fennel
 (local frork (require :frork))
 
-(frork.register :my-thing
+(frork.provide :my-thing
   {:status (fn [name]
-             (if (check-thing name) :ok :missing))
-   :install (fn [name]
-              (install-thing name))})
+             (case (thing-version name)
+               nil :absent
+               "1.0" :present
+               v (values :drifted {:expected "1.0" :actual v})))
+   :create (fn [name]
+             (install-thing name))})
 
 (frork.ok :my-thing "widget")
 ```
 
-The table passed to `register` must include `status` and `install`
-functions. An optional `display` function controls how the assertion
-is printed.
+The table passed to `provide` must include `status` and `create`
+functions. `status` returns `:present`, `:absent`, or `:drifted` along
+with a table of `expected` and `actual` strings. An optional `update`
+function runs when you answer yes to the update prompt for a drifted
+assertion; without one, frork runs `create` again. An optional
+`display` function controls how the assertion is printed.
 
 ## Inline assertions
 
-For one-off checks without a script file:
+For one-off checks without a script file, pass the code with `-e`:
 
 ```
-$ frork check '(ok :directory "~/src")'
-$ frork do '(ok :directory "~/src")'
+$ frork check -e '(ok :directory "~/src")'
+$ frork apply -e '(ok :directory "~/src")'
 ```
+
+## Coming from bork
+
+frork keeps bork's `ok` declaration and renames most of the rest. See
+[bork's documentation](https://bork.sh/) for its side of the table.
+
+| bork | frork |
+|------|-------|
+| assertion type | provider |
+| `register` | `frork.provide` |
+| `status`, and `check` for a single command | `check`, with `-e` for inline code |
+| `satisfy`, and `do` for a single command | `apply`, with `-e` for inline code |
+| `install` and `upgrade` actions | `create` and `update` hooks |
+| `ok` status | no suffix, or `present` from a provider's `status` |
+| `missing` | `absent` |
+| `outdated`, `mismatch (upgradable)`, and `conflict (upgradable)` | `drifted` |
+
+frork doesn't have bork's `no` declaration yet, or a way to remove
+anything.
 
 ## Design goal: compiled Fennel binaries
 

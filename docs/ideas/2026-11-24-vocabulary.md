@@ -1,6 +1,6 @@
 # Vocabulary
 
-Status: idea. Nothing here is committed to or built.
+Status: the renames are built; `(no …)`, removal, and the prompt's cost text are not.
 
 frork's words grew one at a time, and a few of them now pull in
 different directions. This proposes a single vocabulary that holds

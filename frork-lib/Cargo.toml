@@ -3,7 +3,7 @@ name = "frork-lib"
 version = "0.1.0"
 edition = "2024"
 
-# The engine: assertion types, the registry, and the Lua/Fennel runtime.
+# The engine: providers, their registry, and the Lua/Fennel runtime.
 # Which Lua mlua links is left to the crate that builds the final artifact:
 # frork-cli vendors one, frork-lua uses its host's.
 [dependencies]

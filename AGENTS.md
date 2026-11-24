@@ -2,7 +2,7 @@
 
 ## Project
 
-frork is a Fennel-based configuration management tool inspired by [bork](https://bork.sh/), rewritten in Rust. It evaluates declarative Fennel scripts that describe the desired state of a system (symlinks, directories, git repos, Homebrew packages) and can check status or satisfy (install/fix) each assertion.
+frork is a Fennel-based configuration management tool inspired by [bork](https://bork.sh/), rewritten in Rust. It evaluates declarative Fennel scripts that describe the desired state of a system (symlinks, directories, git repos, Homebrew packages) and can check or apply (create or update) each assertion.
 
 ## Repository layout
 
@@ -40,10 +40,10 @@ frork-lib/
   fennel-1.6.0.lua         # Vendored Fennel compiler
   src/
     lib.rs                 # Library root — re-exports modules
-    assertions.rs          # Assertion types and the AssertionType trait
+    assertions.rs          # Built-in providers and the Provider trait
     error.rs               # thiserror + miette::Diagnostic enum (FrorkError)
-    registry.rs            # Assertion type name to factory dispatch
-    report.rs              # Status wording and upgrade-prompt parsing
+    registry.rs            # Provider name to factory dispatch
+    report.rs              # Status wording and update-prompt parsing
     runtime.rs             # Lua/Fennel setup, the frork module, run_code/run_script
     utils.rs               # Shell helpers, path expansion, Lua bindings
   tests/
@@ -75,7 +75,7 @@ just install                # cargo install --locked --path frork-cli
 ## Conventions
 
 - Rust edition 2024, resolver v3 workspace.
-- All domain logic lives in frork-lib; `main.rs` parses arguments and performs I/O, and depends on the library rather than re-declaring its modules. `bin/coverage` ignores it and `.cargo/mutants.toml` excludes it, so anything with a decision in it goes in a library module — `report.rs` holds the status wording and the upgrade-prompt parsing for exactly that reason.
+- All domain logic lives in frork-lib; `main.rs` parses arguments and performs I/O, and depends on the library rather than re-declaring its modules. `bin/coverage` ignores it and `.cargo/mutants.toml` excludes it, so anything with a decision in it goes in a library module — `report.rs` holds the status wording and the update-prompt parsing for exactly that reason.
 - `just mutants` passes with zero survivors. Treat a new survivor as a missing assertion, not a reason to widen the exclusions.
 - Error handling: `miette` in the binary, `thiserror` in library code. Library errors derive `miette::Diagnostic`.
 - Logging uses `tracing` with `tracing-subscriber`. Use `tracing::info`, `tracing::debug`, etc. — not `println!` for diagnostic output.
@@ -95,7 +95,7 @@ Releases run on green main builds and attach tarballs for aarch64 macOS and aarc
 
 `bin/coverage` measures library line coverage with grcov and gates on `COVERAGE_THRESHOLD`, which defaults to 100. The library is at 100% — keep it there rather than lowering the gate.
 
-Unimplemented stubs are excluded rather than counted: the `--excl-line` pattern covers `todo!` alongside `unreachable!` and the explicit `cov-excl-line` marker. An unimplemented method sits inside a `cov-excl-start`/`cov-excl-stop` pair because a function signature carries its own counter that no line pattern can match — the per-impl `upgrade` stubs and the default `remove` on `AssertionType` all do this. A trailing `// cov-excl-line` on the signature won't work either: rustfmt moves it to its own line inside the body.
+Unimplemented stubs are excluded rather than counted: the `--excl-line` pattern covers `todo!` alongside `unreachable!` and the explicit `cov-excl-line` marker. An unimplemented method sits inside a `cov-excl-start`/`cov-excl-stop` pair because a function signature carries its own counter that no line pattern can match — the per-impl `update` stubs and the default `remove` on `Provider` all do this. A trailing `// cov-excl-line` on the signature won't work either: rustfmt moves it to its own line inside the body.
 
 Coverage regions land on their own line in two cases worth knowing, since both look like untestable code and are neither:
 
@@ -112,38 +112,36 @@ Three workspace-specific details the script depends on:
 
 ### CLI
 
-The CLI (`frork`) uses clap with four subcommands:
+The CLI (`frork`) uses clap with two subcommands, each taking either a `.fnl` script or inline Fennel code via `-e`/`--eval`. The two are mutually exclusive, and exactly one is required.
 
-- `check <code>` — evaluate inline Fennel code, report status only
-- `do <code>` — evaluate inline Fennel code, satisfy missing assertions
-- `status <script>` — evaluate a `.fnl` script file, report status only
-- `satisfy <script>` — evaluate a `.fnl` script file, satisfy missing assertions
+- `check <script>` / `check -e <code>` — report the status of each assertion
+- `apply <script>` / `apply -e <code>` — create absent assertions, and update drifted ones after an `Update <display>? [y/N]` prompt
 
 A `--completions <shell>` flag generates shell completions and exits.
 
-### Assertion model
+### Provider model
 
-Each assertion type implements the `AssertionType` trait (`status`, `install`, `upgrade`, `remove`). Status returns `Ok`, `Missing`, or `ConflictUpgrade`.
+Each line in a script is an assertion, and its first argument names the provider that inspects and changes that sort of system state. Each provider implements the `Provider` trait (`status`, `create`, `update`, `remove`). Status returns `Present`, `Absent`, or `Drifted(Drift)`, where `Drift` carries `expected` and `actual` strings.
 
-Built-in assertion types:
+Built-in providers:
 
 - `symlink` — manages symlinks (target, source)
 - `directory` — ensures a directory exists
 - `git` — clones a git repo to a directory, checks the remote URL
 - `brew` — checks whether Homebrew is installed
 - `brew-bundle` — runs `brew bundle check`/`install` against a Brewfile (macOS only)
-- `debug` — accepts Lua functions for status/install, used for testing and one-off assertions
+- `debug` — accepts Lua functions for status/create, used for testing and one-off assertions
 
 `Brew` and `BrewBundle` reach the shell through a `CommandRunner` generic that defaults to `SystemRunner`, so tests substitute a fake instead of running Homebrew. The default type parameter keeps `TypedFactory::<Brew>::new()` and every Fennel script unchanged. `Git` deliberately does not use the seam — its tests run real `git` against a local bare repo, which is offline and tests the actual invocations.
 
-The `Registry` struct in `registry.rs` dispatches assertion types. It checks Lua-registered types first, then falls back to built-in types. Each built-in type is created through a `TypedFactory<T>` that handles Lua argument conversion via `FromLuaMulti`.
+The `Providers` struct in `registry.rs` dispatches provider names. It checks providers defined in Lua first, then falls back to the built-ins. Each built-in is built through a `TypedFactory<T>`, whose `ProviderFactory::build` handles Lua argument conversion via `FromLuaMulti`.
 
 ### Lua/Fennel bridge
 
 `runtime.rs` holds everything that touches Lua. `setup_lua` creates a Lua VM, loads the Fennel compiler, and registers a `frork` module with:
 
-- `frork.ok(type, ...)` — assert that a condition holds (dispatches through the registry)
-- `frork.register(name, {status=fn, install=fn, upgrade=fn})` — register a custom assertion type from Fennel
+- `frork.ok(provider, ...)` — assert that a condition holds (dispatches through `Providers`)
+- `frork.provide(name, {status=fn, create=fn, update=fn})` — define a provider from Fennel
 - `frork.utils` — utility functions exposed to Lua/Fennel scripts
 
 ### Utils module
@@ -160,9 +158,9 @@ The `Registry` struct in `registry.rs` dispatches assertion types. It checks Lua
 
 On the Rust side, `ExpandedPath` handles `~` and `$ENV_VAR` expansion at the Lua/Rust boundary and implements `FromLua` for transparent conversion.
 
-### Custom assertions
+### Custom providers
 
-Fennel scripts can register new assertion types via `frork.register(name, {status=fn, install=fn, upgrade=fn, display=fn})`. These become `LuaAssertionType` values dispatched through the same `AssertionType` trait. The optional `upgrade` function handles a `conflict-upgrade` status when the user answers the upgrade prompt; when absent, upgrading falls back to `install`. The optional `display` function controls how the assertion is printed.
+Fennel scripts can define providers via `frork.provide(name, {status=fn, create=fn, update=fn, display=fn})`. Each becomes a `LuaProvider` holding those hooks, and every assertion that names it is a `LuaAssertion` dispatched through the same `Provider` trait. The status function returns `present`, `absent`, or `drifted` plus an `{expected, actual}` table. The optional `update` function runs on a `drifted` status when the user answers yes to the update prompt; when absent, updating falls back to `create`. The optional `display` function controls how the assertion is printed.
 
 ### frork-lib, frork-cli and frork-lua
 
