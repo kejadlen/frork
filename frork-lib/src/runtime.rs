@@ -95,7 +95,7 @@ fn script_dir(script: &str) -> Option<&str> {
 /// Builds the `frork` module table on an existing Lua state, for hosts that
 /// embed frork as a native module instead of using `setup_lua`.
 pub fn frork_module(lua: &Lua, handle_status: impl StatusHandler) -> LuaResult<LuaTable> {
-    match Frork::new(handle_status, lua.clone()).into_lua(lua)? {
+    match Frork::new(handle_status).into_lua(lua)? {
         LuaValue::Table(table) => Ok(table),
         // Frork::into_lua always returns a table.
         _ => unreachable!(),
@@ -111,7 +111,7 @@ fn setup_lua(handle_status: impl StatusHandler) -> Result<(Lua, LuaTable, LuaTab
     let registered = lua.register_module("fennel", &fennel_module);
     registered.map_err(|e| miette!("Failed to register fennel module: {e}"))?;
 
-    let lua_value = Frork::new(handle_status, lua.clone()).into_lua(&lua);
+    let lua_value = Frork::new(handle_status).into_lua(&lua);
     let frork_value = lua_value.map_err(|e| miette!("Failed to create frork table: {e}"))?;
     let LuaValue::Table(frork_table) = frork_value else {
         // Frork::into_lua always returns a table.
@@ -128,15 +128,13 @@ struct Frork<F> {
     // types at runtime when called from Lua/Fennel code.
     registry: RefCell<Registry>,
     handle_status: F,
-    lua: Lua,
 }
 
 impl<F> Frork<F> {
-    fn new(handle_status: F, lua: Lua) -> Self {
+    fn new(handle_status: F) -> Self {
         Self {
             registry: RefCell::new(Registry::default()),
             handle_status,
-            lua,
         }
     }
 }
@@ -150,7 +148,7 @@ impl<F: StatusHandler> Frork<F> {
         Ok(())
     }
 
-    fn ok(&self, args: LuaMultiValue) -> LuaResult<()> {
+    fn ok(&self, lua: &Lua, args: LuaMultiValue) -> LuaResult<()> {
         if args.is_empty() {
             return Err(LuaError::external(FrorkError::NoOperation));
         }
@@ -164,7 +162,7 @@ impl<F: StatusHandler> Frork<F> {
 
         let factory = self.registry.borrow().get_factory(&assertion_type);
         let factory = factory.map_err(LuaError::external)?;
-        let assertion = factory.create(&self.lua, assertion_args);
+        let assertion = factory.create(lua, assertion_args);
         let assertion = assertion.map_err(LuaError::external)?;
         let status = assertion.status().map_err(LuaError::external)?;
 
@@ -188,7 +186,8 @@ impl<F: StatusHandler> IntoLua for Frork<F> {
         frork_table.set("register", register_fn)?;
 
         let frork_clone = frork.clone();
-        let ok_fn = lua.create_function(move |_lua, args: LuaMultiValue| frork_clone.ok(args))?;
+        let ok_fn =
+            lua.create_function(move |lua: &Lua, args: LuaMultiValue| frork_clone.ok(lua, args))?;
         frork_table.set("ok", ok_fn)?;
 
         frork_table.set("utils", Utils {})?;
