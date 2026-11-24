@@ -199,7 +199,10 @@ impl AssertionType for Directory {
         if path.is_dir() {
             Ok(Status::Ok)
         } else if path.exists() {
-            todo!("{self} exists but is not a directory");
+            Ok(Status::ConflictUpgrade(Conflict {
+                expected: "directory".to_string(),
+                actual: "file".to_string(),
+            }))
         } else {
             Ok(Status::Missing)
         }
@@ -813,6 +816,22 @@ mod tests {
     }
 
     // --- Directory ---
+
+    #[test]
+    fn test_directory_status_conflicts() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("a-file");
+        fs::write(&file, "content").unwrap();
+
+        let directory = Directory {
+            path: expanded(&file),
+        };
+        let Status::ConflictUpgrade(conflict) = directory.status().unwrap() else {
+            panic!("expected a conflict for a non-directory path"); // cov-excl-line
+        };
+        assert_eq!(conflict.expected, "directory");
+        assert_eq!(conflict.actual, "file");
+    }
 
     #[test]
     fn test_directory_install_failure() {
