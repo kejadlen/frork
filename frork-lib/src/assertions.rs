@@ -36,7 +36,6 @@ pub enum Status {
 
 impl FromLuaMulti for Status {
     fn from_lua_multi(values: LuaMultiValue, lua: &Lua) -> LuaResult<Self> {
-        // Try two values: string and conflict for conflict-upgrade.
         if let Ok((status_str, conflict)) =
             <(String, Conflict)>::from_lua_multi(values.clone(), lua)
         {
@@ -53,7 +52,6 @@ impl FromLuaMulti for Status {
             };
         }
 
-        // Try single string.
         if let Ok(status_str) = String::from_lua_multi(values, lua) {
             return match status_str.as_str() {
                 "ok" => Ok(Status::Ok),
@@ -246,7 +244,8 @@ impl AssertionType for Git {
             }));
         }
 
-        // Check if the directory is empty.
+        // An empty directory can still be cloned into, so it reads as
+        // not-yet-cloned.
         let mut entries = fs::read_dir(dir_path).into_diagnostic()?;
         if entries.next().is_none() {
             return Ok(Status::Missing);
@@ -364,7 +363,6 @@ impl<R> std::fmt::Display for Brew<R> {
 
 impl<R: CommandRunner> AssertionType for Brew<R> {
     fn status(&self) -> Result<Status> {
-        // Early return if brew command is not in PATH.
         if !self.runner.has_bin("brew") {
             return Ok(Status::Missing);
         }
@@ -436,7 +434,6 @@ impl<R: CommandRunner> AssertionType for BrewBundle<R> {
         let file_arg = format!("--file={}", self.brewfile);
         let no_auto_update = [("HOMEBREW_NO_AUTO_UPDATE", "true")];
 
-        // First check: brew bundle check --no-upgrade.
         let strict_args = ["bundle", "check", "--no-upgrade", file_arg.as_str()];
         let (_output, exit_code) =
             self.runner
@@ -446,7 +443,6 @@ impl<R: CommandRunner> AssertionType for BrewBundle<R> {
             return Ok(Status::Missing);
         }
 
-        // Second check: brew bundle check (without --no-upgrade).
         let check_args = ["bundle", "check", file_arg.as_str()];
         let (_output, exit_code) =
             self.runner
@@ -871,7 +867,7 @@ mod tests {
         assert_eq!(git.remote_url, "https://example.com/r.git");
     }
 
-    // --- Brew ---
+    // --- CommandRunner ---
 
     /// Records every command it is asked to run and replays canned exit codes.
     #[derive(Default)]

@@ -30,7 +30,6 @@ impl Registry {
     }
 
     pub fn get_factory(&self, assertion_type: &str) -> Result<Box<dyn AssertionTypeFactory>> {
-        // Check Lua assertions first.
         if let Some(lua_assertion) = self.lua_assertion_types.get(assertion_type) {
             return Ok(Box::new(LuaAssertionFactory {
                 assertion_type: assertion_type.to_string(),
@@ -38,7 +37,6 @@ impl Registry {
             }));
         }
 
-        // Return factory for built-in types.
         match assertion_type {
             "brew" => Ok(Box::new(TypedFactory::<Brew>::new())),
             "brew-bundle" => Ok(Box::new(TypedFactory::<BrewBundle>::new())),

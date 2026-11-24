@@ -104,14 +104,12 @@ impl Utils {
 
         let mut expanded = path.to_string();
 
-        // Expand tilde
         if expanded.starts_with('~') {
             let home =
                 env::var("HOME").map_err(|_| miette!("HOME environment variable not set"))?;
             expanded = expanded.replacen('~', &home, 1);
         }
 
-        // Expand environment variables
         let mut missing = Vec::new();
         // Groups 0 and 1 are non-optional in the pattern, so a match
         // guarantees both are present.
@@ -187,7 +185,6 @@ impl Utils {
     }
 
     pub fn assert_bin(bin_name: &str) -> Result<()> {
-        // Use 'which' command to check if binary exists in PATH
         let (_output, exit_code) = Self::sh("which", &[bin_name])?;
 
         if exit_code == 0 {
@@ -321,7 +318,6 @@ mod tests {
 
         lua.globals().set("utils", utils_table).unwrap();
 
-        // Test successful command
         let result: (Option<String>, i32) = lua
             .load(r#"return utils.sh("echo", "hello", "world")"#)
             .eval()
@@ -330,12 +326,10 @@ mod tests {
         assert_eq!(result.0.unwrap().trim(), "hello world");
         assert_eq!(result.1, 0);
 
-        // Test command with non-zero exit
         let result: (Option<String>, i32) = lua.load(r#"return utils.sh("false")"#).eval().unwrap();
 
         assert_eq!(result.1, 1);
 
-        // Test sh! with non-zero exit
         let result: (Option<String>, i32) = lua
             .load(r#"return utils["sh!"]("sh", "-c", "exit 42")"#)
             .eval()
@@ -352,7 +346,6 @@ mod tests {
 
         lua.globals().set("utils", utils_table).unwrap();
 
-        // Test with no arguments - should fail
         let result = lua
             .load(r#"return utils.sh()"#)
             .eval::<(Option<String>, i32)>();

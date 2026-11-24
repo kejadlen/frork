@@ -42,12 +42,10 @@ pub fn run_code(code: &str, handle_status: impl StatusHandler) -> Result<()> {
 pub fn run_script(script: &str, handle_status: impl StatusHandler) -> Result<()> {
     let (lua, _frork_module, fennel_module) = setup_lua(handle_status)?;
 
-    // Add script directory to Lua and Fennel search paths.
     if let Some(script_dir_str) = script_dir(script) {
         let package: LuaResult<LuaTable> = lua.globals().get("package");
         let package_table = package.map_err(|e| miette!("Failed to get package table: {e}"))?;
 
-        // Add to Lua search path.
         let path: LuaResult<String> = package_table.get("path");
         let current_path = path.map_err(|e| miette!("Failed to get current Lua path: {e}"))?;
         let new_path = format!(
@@ -57,7 +55,6 @@ pub fn run_script(script: &str, handle_status: impl StatusHandler) -> Result<()>
         let set_path = package_table.set("path", new_path);
         set_path.map_err(|e| miette!("Failed to set Lua path: {e}"))?;
 
-        // Add to Fennel search path.
         let fennel_path: LuaResult<String> = fennel_module.get("path");
         let current_fennel_path =
             fennel_path.unwrap_or_else(|_| "./?.fnl;./?/init.fnl".to_string());
