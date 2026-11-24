@@ -243,6 +243,24 @@ fn expand_path_replaces_a_leading_tilde_with_home(tc: TestCase) {
 }
 
 #[hegel::test]
+fn expand_path_rejects_a_tilde_before_anything_but_a_separator(tc: TestCase) {
+    // A `~` followed by anything but `/` names another user's home, which
+    // frork cannot expand — and must not mangle into the current home.
+    let user = tc.draw(text().min_size(1).max_size(8).exclude_characters("/$"));
+    let tail = tc.draw(text().max_size(8));
+    let path = format!("~{user}{tail}");
+    let lookup = |name: &str| (name == "HOME").then(|| "/home/user".to_string());
+
+    let error = Utils::expand_path_with(&path, lookup).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("only '~' and '~/' are supported"),
+        "{path:?} did expand"
+    );
+}
+
+#[hegel::test]
 fn expand_path_substitutes_a_variable_with_its_value_verbatim(tc: TestCase) {
     // A `$` reference inside the value must survive: expansion is one pass.
     let value = format!(

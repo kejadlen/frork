@@ -110,10 +110,16 @@ impl Utils {
 
         let mut expanded = path.to_string();
 
-        if expanded.starts_with('~') {
-            let home =
-                lookup("HOME").ok_or_else(|| miette!("HOME environment variable not set"))?;
-            expanded = expanded.replacen('~', &home, 1);
+        if let Some(rest) = expanded.strip_prefix('~') {
+            if rest.is_empty() || rest.starts_with('/') {
+                let home =
+                    lookup("HOME").ok_or_else(|| miette!("HOME environment variable not set"))?;
+                expanded = format!("{home}{rest}");
+            } else {
+                return Err(miette!(
+                    "Cannot expand '~' in '{path}': only '~' and '~/' are supported"
+                ));
+            }
         }
 
         let mut missing = Vec::new();
@@ -308,6 +314,24 @@ mod tests {
         let result = Utils::expand_path_with("~/$TEST_VAR/file", lookup_from(&vars));
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "/home/user/test/file");
+    }
+
+    #[test]
+    fn test_expand_path_bare_tilde() {
+        let vars = [("HOME", "/home/user")];
+        let result = Utils::expand_path_with("~", lookup_from(&vars));
+        assert_eq!(result.unwrap(), "/home/user");
+    }
+
+    #[test]
+    fn test_expand_path_rejects_a_user_tilde() {
+        let vars = [("HOME", "/home/user")];
+        let error = Utils::expand_path_with("~root/x", lookup_from(&vars)).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("only '~' and '~/' are supported")
+        );
     }
 
     #[test]
