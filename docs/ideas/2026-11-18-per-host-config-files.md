@@ -36,9 +36,18 @@ and every built-in `upgrade` is `todo!()`.
   themselves, patching only the keys frork manages.
 - **No saved state.** Everything is derived from the repo and the
   files on disk.
+- **The script picks the override, not frork.** A machine's role is
+  the script it runs, so a private overlay repo's script passes its
+  own overrides in. A hostname-keyed file in a public repo would
+  publish private hostnames and config.
+- **Apps that save atomically get `:file` at the real path.** An
+  atomic save replaces a symlink with a regular file, so linking buys
+  nothing; frork writes the file itself and reconciles any drift.
 
 Rule of thumb: if you'd commit the whole file, use `:file` and
-`:symlink`. If you'd only commit some of its keys, use `:patch`.
+`:symlink`. If the app saves it atomically, drop the `:symlink` and
+point `:file` at the real path. If you'd only commit some of its keys,
+use `:patch`.
 
 ## `:file` plus `:symlink`: base plus host override
 
@@ -92,8 +101,9 @@ assertion type, so status only ever shows `file` and `symlink`:
 ;; otherwise:    a :file in out/ plus a :symlink to it
 ```
 
-A convention could load `overrides/<hostname>.fnl` next to the script,
-so adding a host override is just adding a file.
+frork doesn't look overrides up by convention. The script that calls
+`layered` decides where they come from, whether that's a hostname
+table like the one above or a private repo's role-specific script.
 
 | Case        | On disk                                                       | Where edits go                      |
 |-------------|---------------------------------------------------------------|-------------------------------------|
@@ -125,9 +135,26 @@ conflict (upgradable): file ~/.dotfiles/out/foo.toml
 3. No keeps the edit. Update the Fennel until the diff is empty, and
    status returns to ok.
 
-If an app's atomic save replaced the symlink with a regular file, the
-`:symlink` assertion catches it. Folding that file's contents back is
-still an open question.
+Out files are tracked, not ignored, on a private branch that never
+gets pushed (in jj, `git.private-commits`). The last render is then a
+commit, so `jj diff` shows drift line by line alongside frork's
+key-level report. The rendered content can hold private overrides,
+which is why the branch stays local.
+
+Reconciliation starts two-way: the file on disk against the current
+render, as above. That catches all drift but can't tell an app's edit
+from an override change, so every difference prompts. If that proves
+noisy, the tracked render can serve as the base of a three-way merge,
+which resolves one-sided changes on its own. The base lives in the
+repo, not in frork, so frork stays stateless either way.
+
+An app that saves atomically would replace the symlink with a regular
+file, so those files skip the link: `:file` writes the real path
+directly, and the same diff loop reconciles it.
+
+```fennel
+(ok :file "~/.config/foo.toml" (work (read "foo/base.toml")))
+```
 
 ## `:patch`: patching files apps own
 
@@ -202,14 +229,8 @@ trait Format {
 - Without state, frork can't notice a key you stop managing. Explicit
   `delete` is the only route for now.
 - Two assertions on one file: merged, or applied in order?
-- Where out files live: a gitignored dir in the repo (leaning this
-  way, edits sit next to the code) or XDG state.
 - Name and home for the `layered` helper: part of `frork`, or left to
   scripts?
-- When an atomic save replaces the symlink, should frork diff the
-  regular file against the content before restoring the link?
-- Should frork load `overrides/<hostname>.fnl` by convention, or leave
-  lookup to the script?
 
 ## Alternatives considered
 
