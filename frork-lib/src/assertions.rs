@@ -172,11 +172,23 @@ impl Assertion for Symlink {
         Ok(())
     }
 
-    // cov-excl-start
+    /// Repoints a symlink, refusing anything else at the target.
     fn update(&self) -> Result<()> {
-        todo!()
+        let Ok(metadata) = fs::symlink_metadata(&self.target) else {
+            return self.create();
+        };
+        if !metadata.is_symlink() {
+            return Err(FrorkError::UpdateRefused {
+                path: self.target.to_string(),
+                found: file_kind(metadata.file_type()).to_string(),
+            }
+            .into());
+        }
+        fs::remove_file(&self.target).into_diagnostic()?;
+        self.create()?;
+        debug!("updated: {}", self);
+        Ok(())
     }
-    // cov-excl-stop
 
     fn remove(&self) -> Result<()> {
         match self.status()? {
@@ -1054,6 +1066,74 @@ mod tests {
         let found = format!("points to {}", other.display());
         assert_refused(symlink.remove().unwrap_err(), &link, &found);
         assert!(fs::symlink_metadata(&link).is_ok());
+    }
+
+    #[test]
+    fn test_symlink_update_repoints_a_drifted_link() {
+        let dir = TempDir::new().unwrap();
+        let old = dir.path().join("old");
+        let source = dir.path().join("source");
+        fs::write(&source, "").unwrap();
+        let target = dir.path().join("link");
+        let symlink = Symlink {
+            target: expanded(&target),
+            source: expanded(&source),
+        };
+
+        // Both a live and a dangling old source are replaced.
+        std::os::unix::fs::symlink(&old, &target).unwrap();
+        symlink.update().unwrap();
+        assert!(matches!(symlink.status().unwrap(), Status::Present));
+        assert_eq!(fs::read_link(&target).unwrap(), source);
+
+        fs::write(&old, "").unwrap();
+        fs::remove_file(&target).unwrap();
+        std::os::unix::fs::symlink(&old, &target).unwrap();
+        symlink.update().unwrap();
+        assert!(matches!(symlink.status().unwrap(), Status::Present));
+        assert!(old.exists());
+    }
+
+    #[test]
+    fn test_symlink_update_creates_an_absent_link() {
+        let dir = TempDir::new().unwrap();
+        let source = dir.path().join("source");
+        let symlink = Symlink {
+            target: expanded(&dir.path().join("link")),
+            source: expanded(&source),
+        };
+        symlink.update().unwrap();
+        assert!(matches!(symlink.status().unwrap(), Status::Present));
+    }
+
+    #[test]
+    fn test_symlink_update_refuses_a_non_symlink() {
+        use miette::Diagnostic as _;
+        let dir = TempDir::new().unwrap();
+        let source = dir.path().join("source");
+        let file = dir.path().join("file");
+        fs::write(&file, "keep").unwrap();
+        let sub = dir.path().join("dir");
+        fs::create_dir(&sub).unwrap();
+
+        for (path, found) in [(&file, "file"), (&sub, "directory")] {
+            let symlink = Symlink {
+                target: expanded(path),
+                source: expanded(&source),
+            };
+            let error = symlink.update().unwrap_err();
+            let frork_error = error.downcast_ref::<FrorkError>().unwrap();
+            assert_eq!(
+                frork_error,
+                &FrorkError::UpdateRefused {
+                    path: path.display().to_string(),
+                    found: found.to_string(),
+                }
+            );
+            assert!(frork_error.help().is_some());
+        }
+        assert_eq!(fs::read_to_string(&file).unwrap(), "keep");
+        assert!(sub.is_dir());
     }
 
     #[test]

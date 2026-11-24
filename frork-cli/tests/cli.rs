@@ -276,3 +276,50 @@ fn apply_runs_no_from_a_script() {
         .success();
     assert!(marker.exists());
 }
+
+fn symlink_update_code(link: &std::path::Path, source: &std::path::Path) -> String {
+    format!(
+        r#"(ok :symlink "{}" "{}")"#,
+        link.display(),
+        source.display()
+    )
+}
+
+#[test]
+fn apply_repoints_a_drifted_symlink_when_accepted() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let source = dir.path().join("source");
+    let link = dir.path().join("link");
+    // The old source is dangling.
+    std::os::unix::fs::symlink(dir.path().join("old"), &link).unwrap();
+    let code = symlink_update_code(&link, &source);
+
+    cmd()
+        .args(["apply", "-e", &code])
+        .write_stdin("y\n")
+        .assert()
+        .success()
+        .stdout(contains("updated"));
+    assert_eq!(fs_err::read_link(&link).unwrap(), source);
+    cmd()
+        .args(["check", "-e", &code])
+        .assert()
+        .success()
+        .stdout(contains("drifted").not());
+}
+
+#[test]
+fn apply_refuses_to_replace_a_file_with_a_symlink() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let link = dir.path().join("link");
+    fs_err::write(&link, "keep").unwrap();
+    let code = symlink_update_code(&link, &dir.path().join("source"));
+
+    cmd()
+        .args(["apply", "-e", &code])
+        .write_stdin("y\n")
+        .assert()
+        .failure()
+        .stderr(contains("refusing to update").and(contains("file")));
+    assert_eq!(fs_err::read_to_string(&link).unwrap(), "keep");
+}
