@@ -11,6 +11,7 @@ use miette::IntoDiagnostic as _;
 use miette::Result;
 use miette::miette;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
 
@@ -38,9 +39,14 @@ fn main() -> Result<()> {
     // Assertion types panic through todo!() for cases that are not implemented
     // yet; this renders those with the same formatting as recoverable errors.
     miette::set_panic_hook();
+    // Warnings show without RUST_LOG, so they go to stderr to stay out of
+    // the status lines on stdout.
+    let filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::WARN.into())
+        .from_env_lossy();
     tracing_subscriber::registry()
-        .with(fmt::layer())
-        .with(EnvFilter::from_default_env())
+        .with(fmt::layer().with_writer(std::io::stderr))
+        .with(filter)
         .init();
 
     let cli = Cli::parse();

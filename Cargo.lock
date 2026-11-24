@@ -336,6 +336,7 @@ dependencies = [
  "miette",
  "mlua",
  "predicates",
+ "tempfile",
  "tracing-subscriber",
 ]
 

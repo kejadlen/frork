@@ -19,6 +19,7 @@ tracing-subscriber = { version = "*", features = ["env-filter"] }
 [dev-dependencies]
 assert_cmd = "*"
 predicates = "*"
+tempfile = "*"
 
 [lints]
 workspace = true
