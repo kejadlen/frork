@@ -95,7 +95,7 @@ Releases run on green main builds and attach tarballs for aarch64 macOS and aarc
 
 `bin/coverage` measures library line coverage with grcov and gates on `COVERAGE_THRESHOLD`, which defaults to 100. The library is at 100% — keep it there rather than lowering the gate.
 
-Unimplemented stubs are excluded rather than counted: the `--excl-line` pattern covers `todo!` alongside `unreachable!` and the explicit `cov-excl-line` marker. An unimplemented method sits inside a `cov-excl-start`/`cov-excl-stop` pair because a function signature carries its own counter that no line pattern can match — the per-impl `update` stubs all do this. A trailing `// cov-excl-line` on the signature won't work either: rustfmt moves it to its own line inside the body.
+Unimplemented stubs are excluded rather than counted: the `--excl-line` pattern covers `todo!` alongside `unreachable!` and the explicit `cov-excl-line` marker. An unimplemented method sits inside a `cov-excl-start`/`cov-excl-stop` pair because a function signature carries its own counter that no line pattern can match — the remaining `update` stubs all do this. A trailing `// cov-excl-line` on the signature won't work either: rustfmt moves it to its own line inside the body.
 
 Coverage regions land on their own line in two cases worth knowing, since both look like untestable code and are neither:
 
@@ -133,6 +133,8 @@ Built-in providers:
 - `debug` — accepts Lua functions for status/create/remove, used for testing and one-off assertions
 
 Every `remove` deletes only what its provider would have created, and anything else is an error rather than a skip. `Symlink` removes the link when it points to the source; `Directory` removes only an empty directory; `Git` removes a clone only when it has the declared remote and `Git::unsaved_work` finds no uncommitted or untracked files and no commits missing from every remote. A drifted target, a non-empty directory, or a symlinked clone is `FrorkError::RemoveRefused`, unsaved work in a clone is `RemoveUnsaved`, and `Brew` and `BrewBundle` always return `RemoveUnsupported`. `Debug` calls its `remove` function and errors without one.
+
+`update` follows the same rule. `Symlink` replaces a link that points elsewhere, and `Git` runs `git remote set-url origin`, leaving the tree and commits alone. Anything but a symlink at the target, or a path with no `origin` remote, is `FrorkError::UpdateRefused`. `Directory`, `Brew`, `BrewBundle`, and `Debug` still `todo!()` in `update`, which is why frork-cli installs `miette::set_panic_hook`.
 
 `Brew` and `BrewBundle` reach the shell through a `CommandRunner` generic that defaults to `SystemRunner`, so tests substitute a fake instead of running Homebrew. The default type parameter keeps `TypedFactory::<Brew>::new()` and every Fennel script unchanged. `Git` deliberately does not use the seam — its tests run real `git` against a local bare repo, which is offline and tests the actual invocations.
 

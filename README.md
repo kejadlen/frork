@@ -105,6 +105,14 @@ provider that knows how to inspect and change that sort of thing.
 
 Paths support `~` and `$ENV_VAR` expansion.
 
+Answering yes to the update prompt changes only what the provider
+manages, and refuses anything else with an error that stops the run.
+`symlink` repoints a link that points elsewhere, and refuses a file or
+directory at the target. `git` points the clone's `origin` remote at
+the declared URL, leaving its files and commits alone, and refuses a
+file or a directory with no `origin` remote. The other built-in
+providers can't update yet.
+
 A `no` assertion removes only what the provider would have created,
 and refuses anything else with an error that stops the run. `symlink`
 removes the link only when it points to the source. `directory`

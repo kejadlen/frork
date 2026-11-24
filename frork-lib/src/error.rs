@@ -24,7 +24,7 @@ pub enum FrorkError {
     #[diagnostic(help("push or discard the work yourself, then remove it again"))]
     RemoveUnsaved { path: String, found: String },
     #[error("refusing to update {path}: found {found}")]
-    #[diagnostic(help("frork only replaces a symlink; move or delete it yourself"))]
+    #[diagnostic(help("frork only updates what it manages; move or delete it yourself"))]
     UpdateRefused { path: String, found: String },
 }
 
