@@ -379,8 +379,9 @@ impl Assertion for Git {
     }
     // cov-excl-stop
 
-    /// Removes the clone only when it is a repo with the declared remote. An
-    /// empty directory reads as absent and stays put.
+    /// Removes the clone only when it is a repo with the declared remote and
+    /// nothing a remote lacks. An empty directory reads as absent and stays
+    /// put; ignored files don't count as unsaved work.
     fn remove(&self) -> Result<()> {
         // `status` follows links, so a linked clone would read as present.
         let is_link = fs::symlink_metadata(&self.dir).is_ok_and(|m| m.is_symlink());
@@ -390,12 +391,45 @@ impl Assertion for Git {
         match self.status()? {
             Status::Absent => Ok(()),
             Status::Present => {
+                if let Some(found) = self.unsaved_work()? {
+                    return Err(FrorkError::RemoveUnsaved {
+                        path: self.dir.to_string(),
+                        found: found.to_string(),
+                    }
+                    .into());
+                }
                 fs::remove_dir_all(&self.dir).into_diagnostic()?;
                 debug!("removed: {}", self);
                 Ok(())
             }
             Status::Drifted(drift) => Err(refuse(&self.dir, drift.actual)),
         }
+    }
+}
+
+impl Git {
+    /// Names the first kind of work in the clone that no remote has.
+    fn unsaved_work(&self) -> Result<Option<&'static str>> {
+        // Explicit, so a `status.showUntrackedFiles=no` config can't hide files.
+        let changes = self.git(&["status", "--porcelain", "--untracked-files=all"])?;
+        if !changes.is_empty() {
+            return Ok(Some("uncommitted or untracked files"));
+        }
+        // `--all` takes in every branch, tag, stash, and a detached HEAD.
+        let commits = self.git(&["rev-list", "--all", "--not", "--remotes"])?;
+        if !commits.is_empty() {
+            return Ok(Some("commits on no remote"));
+        }
+        Ok(None)
+    }
+
+    fn git(&self, args: &[&str]) -> Result<String> {
+        let in_dir = [&["-C", self.dir.as_str()], args].concat();
+        let (output, exit_code) = Utils::sh("git", &in_dir)?;
+        if exit_code != 0 {
+            return Err(miette!("`git {}` failed in {}", args.join(" "), self.dir));
+        }
+        Ok(output)
     }
 }
 
@@ -1217,9 +1251,120 @@ mod tests {
         git.remove().unwrap();
 
         git.create().unwrap();
-        fs::write(clone.join("file.txt"), "content").unwrap();
+        fs::write(clone.join(".git/info/exclude"), "ignored\n").unwrap();
+        fs::write(clone.join("ignored"), "build output").unwrap();
         git.remove().unwrap();
         assert!(fs::symlink_metadata(&clone).is_err());
+    }
+
+    /// Runs git in `dir`, isolated from the user's identity, signing, and hooks.
+    fn git_in(dir: &Path, args: &[&str]) {
+        let isolated = [
+            "-c",
+            "user.name=frork",
+            "-c",
+            "user.email=frork@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-C",
+            dir.to_str().unwrap(),
+        ];
+        let (_out, code) = Utils::sh("git", &[&isolated[..], args].concat()).unwrap();
+        assert_eq!(code, 0, "git {args:?}");
+    }
+
+    /// A clone of an origin holding one pushed commit, plus its assertion.
+    fn pushed_clone(dir: &Path) -> (Git, PathBuf) {
+        let clone = dir.join("clone");
+        let git = Git {
+            dir: expanded(&clone),
+            remote_url: bare_origin(dir),
+        };
+        git.create().unwrap();
+        fs::write(clone.join("tracked"), "v1").unwrap();
+        git_in(&clone, &["add", "tracked"]);
+        git_in(&clone, &["commit", "-m", "pushed"]);
+        git_in(&clone, &["push", "origin", "HEAD"]);
+        (git, clone)
+    }
+
+    fn assert_unsaved(git: &Git, clone: &Path, found: &str) {
+        use miette::Diagnostic as _;
+        let error = git.remove().unwrap_err();
+        let frork_error = error.downcast_ref::<FrorkError>().unwrap();
+        assert_eq!(
+            frork_error,
+            &FrorkError::RemoveUnsaved {
+                path: clone.display().to_string(),
+                found: found.to_string(),
+            }
+        );
+        assert!(frork_error.help().is_some());
+        assert!(clone.join(".git").is_dir());
+    }
+
+    #[test]
+    fn test_git_remove_deletes_a_pushed_clone() {
+        let dir = TempDir::new().unwrap();
+        let (git, clone) = pushed_clone(dir.path());
+        git_in(&clone, &["branch", "also-pushed"]);
+
+        git.remove().unwrap();
+        assert!(fs::symlink_metadata(&clone).is_err());
+    }
+
+    #[test]
+    fn test_git_remove_refuses_uncommitted_work() {
+        let dir = TempDir::new().unwrap();
+        let (git, clone) = pushed_clone(dir.path());
+        let found = "uncommitted or untracked files";
+
+        fs::write(clone.join("tracked"), "v2").unwrap();
+        assert_unsaved(&git, &clone, found);
+        git_in(&clone, &["checkout", "tracked"]);
+
+        fs::create_dir(clone.join("new")).unwrap();
+        fs::write(clone.join("new/untracked"), "").unwrap();
+        assert_unsaved(&git, &clone, found);
+    }
+
+    #[test]
+    fn test_git_remove_refuses_commits_on_no_remote() {
+        let found = "commits on no remote";
+        let unpushed = |setup: &dyn Fn(&Path)| {
+            let dir = TempDir::new().unwrap();
+            let (git, clone) = pushed_clone(dir.path());
+            setup(&clone);
+            assert_unsaved(&git, &clone, found);
+        };
+
+        unpushed(&|clone| git_in(clone, &["commit", "--allow-empty", "-m", "local"]));
+        unpushed(&|clone| {
+            git_in(clone, &["checkout", "--detach"]);
+            git_in(clone, &["commit", "--allow-empty", "-m", "detached"]);
+        });
+        unpushed(&|clone| {
+            git_in(clone, &["checkout", "-b", "side"]);
+            git_in(clone, &["commit", "--allow-empty", "-m", "side"]);
+            git_in(clone, &["checkout", "-"]);
+        });
+        unpushed(&|clone| {
+            fs::write(clone.join("tracked"), "stashed").unwrap();
+            git_in(clone, &["stash"]);
+        });
+    }
+
+    #[test]
+    fn test_git_remove_fails_when_git_does() {
+        let dir = TempDir::new().unwrap();
+        let (git, clone) = pushed_clone(dir.path());
+        fs::write(clone.join(".git/index"), "corrupt").unwrap();
+
+        let error = git.remove().unwrap_err();
+        assert!(error.to_string().contains("`git status"), "{error}");
+        assert!(clone.join(".git").is_dir());
     }
 
     #[test]
