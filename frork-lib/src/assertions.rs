@@ -5,9 +5,11 @@ use miette::miette;
 use mlua::prelude::*;
 use serde::Deserialize;
 use std::path::Path;
+use std::path::PathBuf;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 
 use crate::error::FrorkError;
 use crate::utils::ExpandedPath;
@@ -127,6 +129,15 @@ impl FromLuaMulti for Symlink {
     }
 }
 
+impl Symlink {
+    /// Where the link will point, resolving a relative source against the
+    /// link's directory as the OS does, not the working directory.
+    fn resolved_source(&self) -> PathBuf {
+        let target = Path::new(&self.target);
+        target.parent().unwrap_or(target).join(&self.source)
+    }
+}
+
 impl std::fmt::Display for Symlink {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "symlink {} {}", self.target, self.source)
@@ -160,8 +171,10 @@ impl AssertionType for Symlink {
 
     fn install(&self) -> Result<()> {
         use std::os::unix::fs;
-        if !Path::new(&self.source).exists() {
-            return Err(miette!("Symlink source '{}' does not exist", self.source));
+        // Scripts may create the source after the link, so a dangling link
+        // is allowed, but it's more often a typo than intended.
+        if !self.resolved_source().exists() {
+            warn!("{self}: source does not exist, linking anyway");
         }
         fs::symlink(&self.source, &self.target)
             .map_err(|e| miette!("Failed to create symlink: {e}"))?;
@@ -790,18 +803,55 @@ mod tests {
         assert!(error.to_string().contains("Failed to create symlink"));
     }
 
+    /// Runs `f` under a subscriber that records WARN and above, and returns
+    /// what it logged.
+    fn warnings_from(f: impl FnOnce()) -> String {
+        let dir = TempDir::new().unwrap();
+        let log = dir.path().join("log");
+        let writer = std::sync::Arc::new(fs::File::create(&log).unwrap());
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .with_writer(writer)
+            .finish();
+        tracing::subscriber::with_default(subscriber, f);
+        fs::read_to_string(&log).unwrap()
+    }
+
     #[test]
-    fn test_symlink_install_requires_the_source() {
+    fn test_symlink_install_warns_about_a_missing_source() {
         let dir = TempDir::new().unwrap();
         let symlink = Symlink {
             target: expanded(&dir.path().join("link")),
             source: expanded(&dir.path().join("never-created")),
         };
 
-        let error = symlink.install().unwrap_err();
-        assert!(error.to_string().contains("does not exist"));
-        // A failed install leaves the link uncreated.
-        assert!(matches!(symlink.status().unwrap(), Status::Missing));
+        let warnings = warnings_from(|| symlink.install().unwrap());
+
+        assert!(warnings.contains("source does not exist"), "{warnings}");
+        assert!(matches!(symlink.status().unwrap(), Status::Ok));
+    }
+
+    #[test]
+    fn test_symlink_install_resolves_a_relative_source_beside_the_link() {
+        let dir = TempDir::new().unwrap();
+        let links = dir.path().join("links");
+        fs::create_dir(&links).unwrap();
+        fs::write(links.join("present"), "").unwrap();
+
+        // Neither name exists relative to the working directory, so only
+        // resolving against the link's directory tells them apart.
+        let present = Symlink {
+            target: expanded(&links.join("to-present")),
+            source: "present".parse().unwrap(),
+        };
+        let absent = Symlink {
+            target: expanded(&links.join("to-absent")),
+            source: "absent".parse().unwrap(),
+        };
+
+        assert_eq!(warnings_from(|| present.install().unwrap()), "");
+        assert!(warnings_from(|| absent.install().unwrap()).contains("source does not exist"));
     }
 
     #[test]
