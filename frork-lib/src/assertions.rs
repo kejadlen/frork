@@ -350,7 +350,7 @@ impl Assertion for Git {
         if exit_code != 0 {
             return Ok(Status::Drifted(Drift {
                 expected: format!("git repo with remote {}", self.remote_url),
-                actual: "failed to get remote url".to_string(),
+                actual: "directory with no origin remote".to_string(),
             }));
         }
 
@@ -1345,7 +1345,7 @@ mod tests {
         let Status::Drifted(drift) = git.status().unwrap() else {
             panic!("expected drift when the remote cannot be read"); // cov-excl-line
         };
-        assert_eq!(drift.actual, "failed to get remote url");
+        assert_eq!(drift.actual, "directory with no origin remote");
     }
 
     #[test]
@@ -1388,7 +1388,7 @@ mod tests {
 
         for (path, found) in [
             (file, "file"),
-            (no_origin.clone(), "failed to get remote url"),
+            (no_origin.clone(), "directory with no origin remote"),
         ] {
             let git = Git {
                 dir: expanded(&path),
@@ -1598,7 +1598,7 @@ mod tests {
         let not_a_repo = dir.path().join("not-a-repo");
         fs::create_dir(&not_a_repo).unwrap();
         fs::write(not_a_repo.join("file.txt"), "").unwrap();
-        refused(&not_a_repo, &remote_url, "failed to get remote url");
+        refused(&not_a_repo, &remote_url, "directory with no origin remote");
 
         let clone = dir.path().join("clone");
         Git {
