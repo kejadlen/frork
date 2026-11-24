@@ -19,14 +19,7 @@ pub trait Assertion: std::fmt::Display {
     fn status(&self) -> Result<Status>;
     fn create(&self) -> Result<()>;
     fn update(&self) -> Result<()>;
-
-    // Not yet called — will be used once removal can be declared.
-    // cov-excl-start
-    #[allow(dead_code)]
-    fn remove(&self) -> Result<()> {
-        todo!()
-    }
-    // cov-excl-stop
+    fn remove(&self) -> Result<()>;
 }
 
 #[derive(Debug)]
@@ -606,6 +599,7 @@ impl<R: CommandRunner> Assertion for BrewBundle<R> {
 pub struct Debug {
     pub status_fn: Option<LuaFunction>,
     pub create_fn: Option<LuaFunction>,
+    pub remove_fn: Option<LuaFunction>,
 }
 
 impl FromLuaMulti for Debug {
@@ -613,9 +607,11 @@ impl FromLuaMulti for Debug {
         let table = LuaTable::from_lua_multi(args, lua)?;
         let status_fn: Option<LuaFunction> = table.get("status")?;
         let create_fn: Option<LuaFunction> = table.get("create")?;
+        let remove_fn: Option<LuaFunction> = table.get("remove")?;
         Ok(Self {
             status_fn,
             create_fn,
+            remove_fn,
         })
     }
 }
@@ -655,6 +651,18 @@ impl Assertion for Debug {
         todo!()
     }
     // cov-excl-stop
+
+    fn remove(&self) -> Result<()> {
+        info!("debug: removing");
+        let remove_fn = self
+            .remove_fn
+            .as_ref()
+            .ok_or_else(|| miette!("Remove not implemented for debug assertion"))?;
+        remove_fn
+            .call::<()>(LuaMultiValue::new())
+            .map_err(|e| miette!("Debug remove function failed: {e}"))?;
+        Ok(())
+    }
 }
 
 // --- Providers defined in Lua ---
@@ -665,6 +673,7 @@ pub struct LuaProvider {
     pub status_fn: LuaFunction,
     pub create_fn: LuaFunction,
     pub update_fn: Option<LuaFunction>,
+    pub remove_fn: Option<LuaFunction>,
 }
 
 impl FromLua for LuaProvider {
@@ -675,12 +684,14 @@ impl FromLua for LuaProvider {
         let status_fn: LuaFunction = table.get("status")?;
         let create_fn: LuaFunction = table.get("create")?;
         let update_fn: Option<LuaFunction> = table.get("update")?;
+        let remove_fn: Option<LuaFunction> = table.get("remove")?;
 
         Ok(Self {
             display_fn,
             status_fn,
             create_fn,
             update_fn,
+            remove_fn,
         })
     }
 }
@@ -758,6 +769,19 @@ impl Assertion for LuaAssertion {
             self.create()?;
         }
         debug!("updated: {}", self);
+        Ok(())
+    }
+
+    fn remove(&self) -> Result<()> {
+        let remove_fn = self
+            .provider
+            .remove_fn
+            .as_ref()
+            .ok_or_else(|| miette!("Remove not implemented for provider '{}'", self.name))?;
+        remove_fn
+            .call::<()>(self.args.clone())
+            .map_err(FrorkError::from)?;
+        debug!("removed: {}", self);
         Ok(())
     }
 }
@@ -1532,6 +1556,7 @@ mod tests {
         let debug = Debug {
             status_fn: None,
             create_fn: None,
+            remove_fn: None,
         };
 
         assert_eq!(debug.to_string(), "debug");
@@ -1543,6 +1568,13 @@ mod tests {
                 .to_string()
                 .contains("Create not implemented for debug assertion")
         );
+
+        let error = debug.remove().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Remove not implemented for debug assertion")
+        );
     }
 
     #[test]
@@ -1551,7 +1583,11 @@ mod tests {
         let debug = Debug::from_lua_multi(
             multi(
                 &lua,
-                r#"return {status = function() return "absent" end, create = function() end}"#,
+                r#"return {
+                    status = function() return "absent" end,
+                    create = function() _G.created = true end,
+                    remove = function() _G.removed = true end,
+                }"#,
             ),
             &lua,
         )
@@ -1559,6 +1595,9 @@ mod tests {
 
         assert!(matches!(debug.status().unwrap(), Status::Absent));
         debug.create().unwrap();
+        assert!(lua.globals().get::<bool>("created").unwrap());
+        debug.remove().unwrap();
+        assert!(lua.globals().get::<bool>("removed").unwrap());
     }
 
     #[test]
@@ -1570,6 +1609,7 @@ mod tests {
                 r#"return {
                     status = function() error("status boom") end,
                     create = function() error("create boom") end,
+                    remove = function() error("remove boom") end,
                 }"#,
             ),
             &lua,
@@ -1581,6 +1621,10 @@ mod tests {
 
         let error = debug.create().unwrap_err();
         assert!(error.to_string().contains("Debug create function failed"));
+
+        let error = debug.remove().unwrap_err();
+        assert!(error.to_string().contains("Debug remove function failed"));
+        assert!(error.to_string().contains("remove boom"));
     }
 
     #[test]
@@ -1590,6 +1634,7 @@ mod tests {
         for script in [
             r#"return {status = "absent"}"#,
             r#"return {create = "nothing"}"#,
+            r#"return {remove = "nothing"}"#,
         ] {
             assert!(Debug::from_lua_multi(multi(&lua, script), &lua).is_err());
         }
@@ -1613,6 +1658,7 @@ mod tests {
         .unwrap();
         assert!(provider.display_fn.is_none());
         assert!(provider.update_fn.is_none());
+        assert!(provider.remove_fn.is_none());
 
         assert!(lua_provider(&lua, r#"return {create = function() end}"#).is_err());
     }
@@ -1621,7 +1667,7 @@ mod tests {
     fn test_lua_assertion_type_rejects_non_function_optional_fields() {
         let lua = Lua::new();
 
-        for field in ["display", "update"] {
+        for field in ["display", "update", "remove"] {
             let script = format!(
                 r#"return {{status = function() return "present" end, create = function() end, {field} = "oops"}}"#
             );
@@ -1721,6 +1767,62 @@ mod tests {
 
         let assertion = LuaAssertion::new("custom", LuaMultiValue::new(), provider);
         assert!(assertion.update().is_err());
+    }
+
+    #[test]
+    fn test_lua_assertion_remove_calls_hook_with_args() {
+        let lua = Lua::new();
+        let provider = lua_provider(
+            &lua,
+            r#"return {
+                status = function() return "present" end,
+                create = function() end,
+                remove = function(a, b) _G.ran = "remove:" .. a .. "," .. b end,
+            }"#,
+        )
+        .unwrap();
+
+        let args = multi(&lua, r#"return "one", "two""#);
+        let assertion = LuaAssertion::new("custom", args, provider);
+        assertion.remove().unwrap();
+
+        let ran: String = lua.globals().get("ran").unwrap();
+        assert_eq!(ran, "remove:one,two");
+    }
+
+    #[test]
+    fn test_lua_assertion_remove_propagates_failures() {
+        let lua = Lua::new();
+        let provider = lua_provider(
+            &lua,
+            r#"return {
+                status = function() return "present" end,
+                create = function() end,
+                remove = function() error("remove boom") end,
+            }"#,
+        )
+        .unwrap();
+
+        let assertion = LuaAssertion::new("custom", LuaMultiValue::new(), provider);
+        let error = assertion.remove().unwrap_err();
+        assert!(format!("{error:?}").contains("remove boom"));
+    }
+
+    #[test]
+    fn test_lua_assertion_remove_without_hook_names_provider() {
+        let lua = Lua::new();
+        let provider = lua_provider(
+            &lua,
+            r#"return {status = function() return "present" end, create = function() end}"#,
+        )
+        .unwrap();
+
+        let assertion = LuaAssertion::new("custom", multi(&lua, r#"return "arg""#), provider);
+        let error = assertion.remove().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Remove not implemented for provider 'custom'"
+        );
     }
 
     #[test]
