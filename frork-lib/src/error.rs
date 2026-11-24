@@ -14,6 +14,15 @@ pub enum FrorkError {
     MissingProvider,
     #[error("Lua error: {0}")]
     Lua(String),
+    #[error("{provider} cannot be removed")]
+    #[diagnostic(help("uninstall it by hand, or drop the declaration instead"))]
+    RemoveUnsupported { provider: String },
+    #[error("refusing to remove {path}: found {found}")]
+    #[diagnostic(help("frork only removes what it manages; move or delete it yourself"))]
+    RemoveRefused { path: String, found: String },
+    #[error("refusing to remove {path}: found {found}")]
+    #[diagnostic(help("push or discard the work yourself, then remove it again"))]
+    RemoveUnsaved { path: String, found: String },
 }
 
 impl From<LuaError> for FrorkError {

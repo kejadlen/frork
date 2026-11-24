@@ -51,6 +51,28 @@ ok git /Users/alpha/src/project https://github.com/user/project.git: drifted
   kept
 ```
 
+To say something should be gone, declare it with `no` instead of `ok`:
+
+```fennel
+(local {: ok : no} (require :frork))
+
+(no :symlink "~/.vimrc" "~/.dotfiles/.vimrc")
+(no :directory "~/.config/old-editor")
+```
+
+A `no` line with no suffix means the thing is already gone. Otherwise
+it ends in `present`, and `apply` removes it without asking, since the
+`no` already says it should go. A line ending in `drifted` means
+something else is in the way, which the built-in providers refuse to
+remove:
+
+```
+$ frork apply dotfiles.fnl
+no symlink /Users/alpha/.vimrc /Users/alpha/.dotfiles/.vimrc: present
+  removed
+no directory /Users/alpha/.config/old-editor
+```
+
 ## Installation
 
 ```
@@ -83,6 +105,16 @@ provider that knows how to inspect and change that sort of thing.
 
 Paths support `~` and `$ENV_VAR` expansion.
 
+A `no` assertion removes only what the provider would have created,
+and refuses anything else with an error that stops the run. `symlink`
+removes the link only when it points to the source. `directory`
+removes only an empty directory. `git` removes a clone only when it has
+the declared remote and holds no uncommitted or untracked files and no
+commits missing from every remote; ignored files don't count. A
+symlinked clone is refused too. `brew` and `brew-bundle` don't support
+removal, so a `no` on either errors when it finds Homebrew or the
+packages installed.
+
 ## Writing a provider
 
 Add a provider from Fennel using `frork.provide`:
@@ -97,7 +129,9 @@ Add a provider from Fennel using `frork.provide`:
                "1.0" :present
                v (values :drifted {:expected "1.0" :actual v})))
    :create (fn [name]
-             (install-thing name))})
+             (install-thing name))
+   :remove (fn [name]
+             (uninstall-thing name))})
 
 (frork.ok :my-thing "widget")
 ```
@@ -107,6 +141,8 @@ functions. `status` returns `:present`, `:absent`, or `:drifted` along
 with a table of `expected` and `actual` strings. An optional `update`
 function runs when you answer yes to the update prompt for a drifted
 assertion; without one, frork runs `create` again. An optional
+`remove` function runs when `apply` meets a `no` assertion that is
+present or drifted; without one, removing it is an error. An optional
 `display` function controls how the assertion is printed.
 
 ## Inline assertions
@@ -120,8 +156,9 @@ $ frork apply -e '(ok :directory "~/src")'
 
 ## Coming from bork
 
-frork keeps bork's `ok` declaration and renames most of the rest. See
-[bork's documentation](https://bork.sh/) for its side of the table.
+frork keeps bork's `ok` and `no` declarations and renames most of the
+rest. See [bork's documentation](https://bork.sh/) for its side of the
+table.
 
 | bork | frork |
 |------|-------|
@@ -129,13 +166,11 @@ frork keeps bork's `ok` declaration and renames most of the rest. See
 | `register` | `frork.provide` |
 | `status`, and `check` for a single command | `check`, with `-e` for inline code |
 | `satisfy`, and `do` for a single command | `apply`, with `-e` for inline code |
+| `ok` and `no` declarations | `ok` and `no` |
 | `install` and `upgrade` actions | `create` and `update` hooks |
 | `ok` status | no suffix, or `present` from a provider's `status` |
 | `missing` | `absent` |
 | `outdated`, `mismatch (upgradable)`, and `conflict (upgradable)` | `drifted` |
-
-frork doesn't have bork's `no` declaration yet, or a way to remove
-anything.
 
 ## Design goal: compiled Fennel binaries
 

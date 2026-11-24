@@ -141,6 +141,10 @@ impl Assertion for Named {
     fn update(&self) -> miette::Result<()> {
         Ok(())
     }
+
+    fn remove(&self) -> miette::Result<()> {
+        Ok(())
+    }
 }
 
 // --- chomp ---

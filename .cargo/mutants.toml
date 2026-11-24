@@ -5,14 +5,13 @@ exclude_re = [
     # Unimplemented update stubs — nothing calls them in tests, so replacing
     # the todo!() with Ok(()) cannot be observed. Drop an entry when that
     # provider's update is implemented, at the same point its cov-excl markers
-    # in assertions.rs go. remove still defaults on the trait.
+    # in assertions.rs go.
     "impl Assertion for Symlink>::update",
     "impl Assertion for Directory>::update",
     "impl Assertion for Git>::update",
     "impl Assertion for Brew<R>>::update",
     "impl Assertion for BrewBundle<R>>::update",
     "impl Assertion for Debug>::update",
-    "Assertion::remove",
 
     # BrewBundle's status and create exist twice, split on
     # #[cfg(target_os = "macos")]. cargo-mutants cannot tell which half is
