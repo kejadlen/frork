@@ -145,10 +145,16 @@ impl AssertionType for Symlink {
             if link_target == Path::new(&self.source) {
                 Ok(Status::Ok)
             } else {
-                todo!("{self} points to the wrong target");
+                Ok(Status::ConflictUpgrade(Conflict {
+                    expected: self.source.to_string(),
+                    actual: format!("points to {}", link_target.display()),
+                }))
             }
         } else {
-            todo!("{self} exists but is not a symlink");
+            Ok(Status::ConflictUpgrade(Conflict {
+                expected: format!("symlink to {}", self.source),
+                actual: "not a symlink".to_string(),
+            }))
         }
     }
 
@@ -725,6 +731,44 @@ mod tests {
     }
 
     // --- Symlink ---
+
+    #[test]
+    fn test_symlink_status_conflicts() {
+        let dir = TempDir::new().unwrap();
+        let source = dir.path().join("source");
+        fs::write(&source, "").unwrap();
+
+        // A link pointing somewhere else conflicts.
+        let other = dir.path().join("other");
+        fs::write(&other, "").unwrap();
+        let target = dir.path().join("link");
+        std::os::unix::fs::symlink(&other, &target).unwrap();
+        let symlink = Symlink {
+            target: expanded(&target),
+            source: expanded(&source),
+        };
+        let Status::ConflictUpgrade(conflict) = symlink.status().unwrap() else {
+            panic!("expected a conflict for a wrong-target link"); // cov-excl-line
+        };
+        assert_eq!(conflict.expected, source.display().to_string());
+        assert_eq!(conflict.actual, format!("points to {}", other.display()));
+
+        // A non-symlink where the link goes conflicts too.
+        let file = dir.path().join("file-target");
+        fs::write(&file, "").unwrap();
+        let symlink = Symlink {
+            target: expanded(&file),
+            source: expanded(&source),
+        };
+        let Status::ConflictUpgrade(conflict) = symlink.status().unwrap() else {
+            panic!("expected a conflict for a non-symlink target"); // cov-excl-line
+        };
+        assert_eq!(
+            conflict.expected,
+            format!("symlink to {}", source.display())
+        );
+        assert_eq!(conflict.actual, "not a symlink");
+    }
 
     #[test]
     fn test_symlink_install_failure() {
