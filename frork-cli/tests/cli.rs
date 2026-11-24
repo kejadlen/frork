@@ -108,9 +108,7 @@ fn apply_creates_from_inline_code() {
         .args(["apply", "-e", &code])
         .assert()
         .success()
-        .stdout(format!(
-            "ok directory {display}: absent\nok directory {display}\n"
-        ));
+        .stdout(format!("ok directory {display}: absent\n  created\n"));
     assert!(path.is_dir());
 }
 
@@ -143,4 +141,49 @@ fn check_and_apply_reject_both_a_script_and_eval() {
             .failure()
             .stderr(contains("cannot be used with"));
     }
+}
+
+/// A drifted provider whose update leaves a marker file, so a test can tell
+/// whether it ran.
+fn drifted_fixture() -> (tempfile::TempDir, std::path::PathBuf, String) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let marker = dir.path().join("updated");
+    let code = format!(
+        r#"(local frork (require :frork))
+           (frork.provide :thing
+             {{:status (fn [] (values :drifted {{:expected "new" :actual "old"}}))
+               :create (fn [])
+               :update (fn [] (: (io.open "{}" :w) :close))}})
+           (ok :thing)"#,
+        marker.display()
+    );
+    (dir, marker, code)
+}
+
+const DRIFTED: &str = "ok thing: drifted\n  expected: new\n    actual: old\n  update? [y/N] ";
+
+#[test]
+fn apply_keeps_a_drift_when_declined() {
+    let (_dir, marker, code) = drifted_fixture();
+
+    cmd()
+        .args(["apply", "-e", &code])
+        .write_stdin("n\n")
+        .assert()
+        .success()
+        .stdout(format!("{DRIFTED}  kept\n"));
+    assert!(!marker.exists());
+}
+
+#[test]
+fn apply_updates_a_drift_when_accepted() {
+    let (_dir, marker, code) = drifted_fixture();
+
+    cmd()
+        .args(["apply", "-e", &code])
+        .write_stdin("y\n")
+        .assert()
+        .success()
+        .stdout(format!("{DRIFTED}  updated\n"));
+    assert!(marker.exists());
 }

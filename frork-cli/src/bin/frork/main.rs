@@ -100,20 +100,20 @@ fn check(status: &Status, assertion: &dyn Provider) -> Result<()> {
 }
 
 fn apply(status: &Status, assertion: &dyn Provider) -> Result<()> {
-    print_lines(&report::render(status, assertion));
-
     match status {
-        Status::Present => {}
+        Status::Present => print_lines(&report::render(status, assertion)),
         Status::Absent => {
+            print_lines(&report::render(status, assertion));
             assertion.create()?;
-            print_lines(&report::render(&Status::Present, assertion));
+            println!("{}", report::CREATED);
         }
         Status::Drifted(_) => {
-            if report::wants_update(&prompt(&report::update_prompt(assertion))?) {
+            print_lines(&report::render(status, assertion));
+            if report::wants_update(&prompt(report::UPDATE_PROMPT)?) {
                 assertion.update()?;
-                print_lines(&report::render(&Status::Present, assertion));
+                println!("{}", report::UPDATED);
             } else {
-                println!("{}", report::kept(assertion));
+                println!("{}", report::KEPT);
             }
         }
     }

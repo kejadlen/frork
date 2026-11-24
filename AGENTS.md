@@ -115,7 +115,7 @@ Three workspace-specific details the script depends on:
 The CLI (`frork`) uses clap with two subcommands, each taking either a `.fnl` script or inline Fennel code via `-e`/`--eval`. The two are mutually exclusive, and exactly one is required.
 
 - `check <script>` / `check -e <code>` — report the status of each assertion
-- `apply <script>` / `apply -e <code>` — create absent assertions, and update drifted ones after an `Update <display>? [y/N]` prompt
+- `apply <script>` / `apply -e <code>` — create absent assertions, and update drifted ones after an `update? [y/N]` prompt
 
 A `--completions <shell>` flag generates shell completions and exits.
 

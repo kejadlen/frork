@@ -16,15 +16,18 @@ pub fn render(status: &Status, assertion: &dyn Provider) -> Vec<String> {
     }
 }
 
-/// The question asked before updating a drifted assertion.
-pub fn update_prompt(assertion: &dyn Provider) -> String {
-    format!("Update {assertion}? [y/N] ")
-}
+/// The line printed once an absent assertion has been created.
+pub const CREATED: &str = "  created";
+
+/// The question asked under a drifted assertion's status lines, which already
+/// name it.
+pub const UPDATE_PROMPT: &str = "  update? [y/N] ";
+
+/// The line printed when the update prompt is accepted and the update runs.
+pub const UPDATED: &str = "  updated";
 
 /// The line printed when the update prompt is declined.
-pub fn kept(assertion: &dyn Provider) -> String {
-    format!("kept: {assertion}")
-}
+pub const KEPT: &str = "  kept";
 
 /// Whether a reply to the update prompt means yes. Anything else declines,
 /// so an unrecognised answer never updates.

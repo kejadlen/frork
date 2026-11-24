@@ -386,18 +386,6 @@ fn render_repeats_the_declaration_and_suffixes_absence(tc: TestCase) {
 }
 
 #[hegel::test]
-fn update_prompt_and_kept_name_the_assertion(tc: TestCase) {
-    let display = tc.draw(text());
-    let assertion = Named(display.clone());
-
-    assert_eq!(
-        report::update_prompt(&assertion),
-        format!("Update {display}? [y/N] ")
-    );
-    assert_eq!(report::kept(&assertion), format!("kept: {display}"));
-}
-
-#[hegel::test]
 fn render_shows_both_sides_of_a_drift_verbatim(tc: TestCase) {
     let display = tc.draw(text());
     let expected = tc.draw(text());

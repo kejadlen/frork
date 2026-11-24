@@ -30,12 +30,13 @@ Create everything that's absent:
 $ frork apply dotfiles.fnl
 ok symlink /Users/alpha/.gitconfig /Users/alpha/.dotfiles/.gitconfig
 ok directory /Users/alpha/.config/nvim: absent
-ok directory /Users/alpha/.config/nvim
+  created
 ok git /Users/alpha/src/project https://github.com/user/project.git: absent
-ok git /Users/alpha/src/project https://github.com/user/project.git
+  created
 ```
 
-A line with no suffix holds. When something is there but different,
+A line with no suffix holds, and anything `apply` does about an
+assertion is indented under it. When something is there but different,
 the line ends in `drifted` and shows what differs, and `apply` asks
 before updating it:
 
@@ -46,8 +47,8 @@ ok directory /Users/alpha/.config/nvim
 ok git /Users/alpha/src/project https://github.com/user/project.git: drifted
   expected: https://github.com/user/project.git
     actual: current remote: https://example.com/other.git
-Update git /Users/alpha/src/project https://github.com/user/project.git? [y/N] n
-kept: git /Users/alpha/src/project https://github.com/user/project.git
+  update? [y/N] n
+  kept
 ```
 
 ## Installation
