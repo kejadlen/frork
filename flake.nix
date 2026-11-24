@@ -33,7 +33,6 @@
             # There is no rustup llvm-tools component here, so bin/coverage
             # points grcov at the LLVM that rustc was built with.
             GRCOV_LLVM_PATH = "${pkgs.rustc.llvmPackages.llvm}/bin";
-            RANGER_DEFAULT_BACKLOG = "frork";
           };
         });
 
