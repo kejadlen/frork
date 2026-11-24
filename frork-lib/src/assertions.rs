@@ -184,6 +184,26 @@ impl Assertion for Symlink {
         todo!()
     }
     // cov-excl-stop
+
+    fn remove(&self) -> Result<()> {
+        match self.status()? {
+            Status::Absent => Ok(()),
+            Status::Present => {
+                fs::remove_file(&self.target).into_diagnostic()?;
+                debug!("removed: {}", self);
+                Ok(())
+            }
+            Status::Drifted(drift) => Err(refuse(&self.target, drift.actual)),
+        }
+    }
+}
+
+fn refuse(path: &ExpandedPath, found: impl Into<String>) -> miette::Report {
+    FrorkError::RemoveRefused {
+        path: path.to_string(),
+        found: found.into(),
+    }
+    .into()
 }
 
 pub struct Directory {
@@ -232,6 +252,24 @@ impl Assertion for Directory {
         todo!()
     }
     // cov-excl-stop
+
+    /// Removes only an empty directory: the assertion is that the directory
+    /// exists, so its contents belong to someone else.
+    fn remove(&self) -> Result<()> {
+        let Ok(metadata) = fs::symlink_metadata(&self.path) else {
+            return Ok(());
+        };
+        if !metadata.is_dir() {
+            return Err(refuse(&self.path, file_kind(metadata.file_type())));
+        }
+        let mut entries = fs::read_dir(&self.path).into_diagnostic()?;
+        if entries.next().is_some() {
+            return Err(refuse(&self.path, "a non-empty directory"));
+        }
+        fs::remove_dir(&self.path).into_diagnostic()?;
+        debug!("removed: {}", self);
+        Ok(())
+    }
 }
 
 /// Names what occupies a path that should hold something else.
@@ -340,6 +378,25 @@ impl Assertion for Git {
         todo!()
     }
     // cov-excl-stop
+
+    /// Removes the clone only when it is a repo with the declared remote. An
+    /// empty directory reads as absent and stays put.
+    fn remove(&self) -> Result<()> {
+        // `status` follows links, so a linked clone would read as present.
+        let is_link = fs::symlink_metadata(&self.dir).is_ok_and(|m| m.is_symlink());
+        if is_link {
+            return Err(refuse(&self.dir, "symlink"));
+        }
+        match self.status()? {
+            Status::Absent => Ok(()),
+            Status::Present => {
+                fs::remove_dir_all(&self.dir).into_diagnostic()?;
+                debug!("removed: {}", self);
+                Ok(())
+            }
+            Status::Drifted(drift) => Err(refuse(&self.dir, drift.actual)),
+        }
+    }
 }
 
 /// A seam over shelling out, so providers can be exercised without
@@ -440,6 +497,17 @@ impl<R: CommandRunner> Assertion for Brew<R> {
         todo!()
     }
     // cov-excl-stop
+
+    fn remove(&self) -> Result<()> {
+        Err(remove_unsupported(self))
+    }
+}
+
+fn remove_unsupported(provider: &impl std::fmt::Display) -> miette::Report {
+    FrorkError::RemoveUnsupported {
+        provider: provider.to_string(),
+    }
+    .into()
 }
 
 pub struct BrewBundle<R = SystemRunner> {
@@ -529,6 +597,10 @@ impl<R: CommandRunner> Assertion for BrewBundle<R> {
         todo!()
     }
     // cov-excl-stop
+
+    fn remove(&self) -> Result<()> {
+        Err(remove_unsupported(self))
+    }
 }
 
 pub struct Debug {
@@ -866,6 +938,66 @@ mod tests {
         assert!(warnings_from(|| absent.create().unwrap()).contains("source does not exist"));
     }
 
+    /// Asserts `error` is the refusal for `path`, with a help line.
+    fn assert_refused(error: miette::Report, path: &Path, found: &str) {
+        use miette::Diagnostic as _;
+        let frork_error = error.downcast_ref::<FrorkError>().unwrap();
+        assert_eq!(
+            frork_error,
+            &FrorkError::RemoveRefused {
+                path: path.display().to_string(),
+                found: found.to_string(),
+            }
+        );
+        assert!(frork_error.help().is_some());
+    }
+
+    #[test]
+    fn test_symlink_remove_deletes_only_the_link() {
+        let dir = TempDir::new().unwrap();
+        let source = dir.path().join("source");
+        fs::write(&source, "content").unwrap();
+        let target = dir.path().join("link");
+        let symlink = Symlink {
+            target: expanded(&target),
+            source: expanded(&source),
+        };
+
+        // Nothing there yet is nothing to remove.
+        symlink.remove().unwrap();
+
+        symlink.create().unwrap();
+        symlink.remove().unwrap();
+        assert!(fs::symlink_metadata(&target).is_err());
+        assert_eq!(fs::read_to_string(&source).unwrap(), "content");
+    }
+
+    #[test]
+    fn test_symlink_remove_refuses_what_it_does_not_own() {
+        let dir = TempDir::new().unwrap();
+        let source = dir.path().join("source");
+
+        let file = dir.path().join("file");
+        fs::write(&file, "").unwrap();
+        let symlink = Symlink {
+            target: expanded(&file),
+            source: expanded(&source),
+        };
+        assert_refused(symlink.remove().unwrap_err(), &file, "not a symlink");
+        assert!(file.is_file());
+
+        let other = dir.path().join("other");
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&other, &link).unwrap();
+        let symlink = Symlink {
+            target: expanded(&link),
+            source: expanded(&source),
+        };
+        let found = format!("points to {}", other.display());
+        assert_refused(symlink.remove().unwrap_err(), &link, &found);
+        assert!(fs::symlink_metadata(&link).is_ok());
+    }
+
     #[test]
     fn test_symlink_from_lua() {
         let lua = Lua::new();
@@ -937,6 +1069,49 @@ mod tests {
             path: expanded(&blocker.join("child")),
         };
         assert!(directory.create().is_err());
+    }
+
+    #[test]
+    fn test_directory_remove_deletes_an_empty_directory() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("empty");
+        let directory = Directory {
+            path: expanded(&path),
+        };
+
+        directory.remove().unwrap();
+
+        directory.create().unwrap();
+        directory.remove().unwrap();
+        assert!(fs::symlink_metadata(&path).is_err());
+    }
+
+    #[test]
+    fn test_directory_remove_refuses_what_it_does_not_own() {
+        let dir = TempDir::new().unwrap();
+        let refused = |path: &Path, found: &str| {
+            let directory = Directory {
+                path: expanded(path),
+            };
+            assert_refused(directory.remove().unwrap_err(), path, found);
+            assert!(fs::symlink_metadata(path).is_ok());
+        };
+
+        let full = dir.path().join("full");
+        fs::create_dir(&full).unwrap();
+        fs::write(full.join("file"), "").unwrap();
+        refused(&full, "a non-empty directory");
+
+        let file = dir.path().join("file");
+        fs::write(&file, "").unwrap();
+        refused(&file, "file");
+
+        let empty = dir.path().join("empty");
+        fs::create_dir(&empty).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&empty, &link).unwrap();
+        refused(&link, "symlink");
+        assert!(empty.is_dir());
     }
 
     #[test]
@@ -1028,6 +1203,75 @@ mod tests {
 
         let error = git.create().unwrap_err();
         assert!(error.to_string().contains("Failed to clone git repository"));
+    }
+
+    #[test]
+    fn test_git_remove_deletes_the_clone() {
+        let dir = TempDir::new().unwrap();
+        let clone = dir.path().join("clone");
+        let git = Git {
+            dir: expanded(&clone),
+            remote_url: bare_origin(dir.path()),
+        };
+
+        git.remove().unwrap();
+
+        git.create().unwrap();
+        fs::write(clone.join("file.txt"), "content").unwrap();
+        git.remove().unwrap();
+        assert!(fs::symlink_metadata(&clone).is_err());
+    }
+
+    #[test]
+    fn test_git_remove_leaves_an_empty_directory() {
+        let dir = TempDir::new().unwrap();
+        let empty = dir.path().join("empty");
+        fs::create_dir(&empty).unwrap();
+        let git = Git {
+            dir: expanded(&empty),
+            remote_url: bare_origin(dir.path()),
+        };
+
+        git.remove().unwrap();
+        assert!(empty.is_dir());
+    }
+
+    #[test]
+    fn test_git_remove_refuses_what_it_does_not_own() {
+        let dir = TempDir::new().unwrap();
+        let remote_url = bare_origin(dir.path());
+        let refused = |path: &Path, remote_url: &str, found: &str| {
+            let git = Git {
+                dir: expanded(path),
+                remote_url: remote_url.to_string(),
+            };
+            assert_refused(git.remove().unwrap_err(), path, found);
+            assert!(fs::symlink_metadata(path).is_ok());
+        };
+
+        let file = dir.path().join("file");
+        fs::write(&file, "").unwrap();
+        refused(&file, &remote_url, "file");
+
+        let not_a_repo = dir.path().join("not-a-repo");
+        fs::create_dir(&not_a_repo).unwrap();
+        fs::write(not_a_repo.join("file.txt"), "").unwrap();
+        refused(&not_a_repo, &remote_url, "failed to get remote url");
+
+        let clone = dir.path().join("clone");
+        Git {
+            dir: expanded(&clone),
+            remote_url: remote_url.clone(),
+        }
+        .create()
+        .unwrap();
+        let found = format!("current remote: {remote_url}");
+        refused(&clone, "https://example.com/other.git", &found);
+
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&clone, &link).unwrap();
+        refused(&link, &remote_url, "symlink");
+        assert!(clone.join(".git").is_dir());
     }
 
     #[test]
@@ -1173,6 +1417,28 @@ mod tests {
         assert!(error.to_string().contains("Failed to install Homebrew"));
     }
 
+    fn assert_remove_unsupported(error: miette::Report, provider: &str) {
+        use miette::Diagnostic as _;
+        let frork_error = error.downcast_ref::<FrorkError>().unwrap();
+        assert_eq!(
+            frork_error,
+            &FrorkError::RemoveUnsupported {
+                provider: provider.to_string(),
+            }
+        );
+        assert!(frork_error.help().is_some());
+    }
+
+    #[test]
+    fn test_brew_remove_is_unsupported() {
+        let brew = Brew {
+            runner: FakeRunner::default(),
+        };
+
+        assert_remove_unsupported(brew.remove().unwrap_err(), "brew");
+        assert!(brew.runner.calls().is_empty());
+    }
+
     // --- BrewBundle ---
 
     fn brew_bundle(runner: FakeRunner) -> BrewBundle<FakeRunner> {
@@ -1190,6 +1456,14 @@ mod tests {
 
         assert_eq!(bundle.to_string(), "brew-bundle /tmp/Brewfile");
         assert_eq!(bundle.brewfile.as_str(), "/tmp/Brewfile");
+    }
+
+    #[test]
+    fn test_brew_bundle_remove_is_unsupported() {
+        let bundle = brew_bundle(FakeRunner::default());
+
+        assert_remove_unsupported(bundle.remove().unwrap_err(), "brew-bundle /tmp/Brewfile");
+        assert!(bundle.runner.calls().is_empty());
     }
 
     #[cfg(not(target_os = "macos"))]
