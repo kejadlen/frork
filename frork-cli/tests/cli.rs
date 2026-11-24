@@ -276,3 +276,78 @@ fn apply_runs_no_from_a_script() {
         .success();
     assert!(marker.exists());
 }
+
+fn git(dir: &std::path::Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}");
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+fn git_fixture() -> (tempfile::TempDir, std::path::PathBuf, String, String) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let old = dir.path().join("old.git");
+    let new = dir.path().join("new.git");
+    for bare in [&old, &new] {
+        git(dir.path(), &["init", "--bare", bare.to_str().unwrap()]);
+    }
+    let clone = dir.path().join("clone");
+    git(
+        dir.path(),
+        &["clone", old.to_str().unwrap(), clone.to_str().unwrap()],
+    );
+    let new = new.display().to_string();
+    let code = format!(r#"(ok :git "{}" "{new}")"#, clone.display());
+    (dir, clone, new, code)
+}
+
+#[test]
+fn apply_repoints_a_drifted_clone_when_accepted() {
+    let (_dir, clone, new, code) = git_fixture();
+    std::fs::write(clone.join("untracked"), "u").unwrap();
+
+    cmd()
+        .args(["apply", "-e", &code])
+        .write_stdin("y\n")
+        .assert()
+        .success()
+        .stdout(contains("update? [y/N] ").and(contains("updated")));
+    assert_eq!(git(&clone, &["config", "remote.origin.url"]), new);
+    assert!(clone.join("untracked").exists());
+}
+
+#[test]
+fn apply_keeps_a_drifted_clone_when_declined() {
+    let (_dir, clone, new, code) = git_fixture();
+
+    cmd()
+        .args(["apply", "-e", &code])
+        .write_stdin("n\n")
+        .assert()
+        .success();
+    assert_ne!(git(&clone, &["config", "remote.origin.url"]), new);
+}
+
+#[test]
+fn apply_reports_an_unrepointable_clone() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("plain");
+    std::fs::create_dir(&path).unwrap();
+    std::fs::write(path.join("file.txt"), "x").unwrap();
+    let code = format!(
+        r#"(ok :git "{}" "https://example.com/r.git")"#,
+        path.display()
+    );
+
+    cmd()
+        .args(["apply", "-e", &code])
+        .write_stdin("y\n")
+        .assert()
+        .failure()
+        .stderr(contains("refusing to update").and(contains("plain")));
+    assert!(path.join("file.txt").exists());
+}

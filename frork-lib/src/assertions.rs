@@ -366,11 +366,28 @@ impl Assertion for Git {
         Ok(())
     }
 
-    // cov-excl-start
+    /// Points `origin` at the declared URL, leaving the tree and commits be.
+    /// Only a repo with an `origin` can be updated; a file or a directory
+    /// without one is refused untouched.
     fn update(&self) -> Result<()> {
-        todo!()
+        match self.status()? {
+            Status::Absent => self.create(),
+            Status::Present => Ok(()),
+            Status::Drifted(drift) => {
+                let has_origin = self.git(&["config", "--get", "remote.origin.url"]).is_ok();
+                if !has_origin {
+                    return Err(FrorkError::UpdateRefused {
+                        path: self.dir.to_string(),
+                        found: drift.actual,
+                    }
+                    .into());
+                }
+                self.git(&["remote", "set-url", "origin", &self.remote_url])?;
+                debug!("updated: {}", self);
+                Ok(())
+            }
+        }
     }
-    // cov-excl-stop
 
     /// Removes the clone only when it is a repo with the declared remote and
     /// nothing a remote lacks. An empty directory reads as absent and stays
@@ -1249,6 +1266,82 @@ mod tests {
             panic!("expected drift when the remote cannot be read"); // cov-excl-line
         };
         assert_eq!(drift.actual, "failed to get remote url");
+    }
+
+    #[test]
+    fn test_git_update_repoints_origin_and_keeps_work() {
+        let dir = TempDir::new().unwrap();
+        let (git, clone) = pushed_clone(dir.path());
+        git_in(&clone, &["commit", "--allow-empty", "-m", "local"]);
+        fs::write(clone.join("tracked"), "v2").unwrap();
+        fs::write(clone.join("untracked"), "u").unwrap();
+        let head = |c: &Path| {
+            Utils::sh("git", &["-C", c.to_str().unwrap(), "rev-parse", "HEAD"])
+                .unwrap()
+                .0
+        };
+        let before = head(&clone);
+        let moved = Git {
+            dir: git.dir.clone(),
+            remote_url: dir.path().join("elsewhere.git").display().to_string(),
+        };
+        assert!(matches!(moved.status().unwrap(), Status::Drifted(_)));
+
+        moved.update().unwrap();
+
+        assert!(matches!(moved.status().unwrap(), Status::Present));
+        assert_eq!(head(&clone), before);
+        assert_eq!(fs::read_to_string(clone.join("tracked")).unwrap(), "v2");
+        assert_eq!(fs::read_to_string(clone.join("untracked")).unwrap(), "u");
+    }
+
+    #[test]
+    fn test_git_update_refuses_what_it_cannot_repoint() {
+        use miette::Diagnostic as _;
+        let dir = TempDir::new().unwrap();
+        let remote_url = bare_origin(dir.path());
+        let file = dir.path().join("a-file");
+        fs::write(&file, "content").unwrap();
+        let no_origin = dir.path().join("no-origin");
+        fs::create_dir(&no_origin).unwrap();
+        fs::write(no_origin.join("file.txt"), "content").unwrap();
+
+        for (path, found) in [
+            (file, "file"),
+            (no_origin.clone(), "failed to get remote url"),
+        ] {
+            let git = Git {
+                dir: expanded(&path),
+                remote_url: remote_url.clone(),
+            };
+            let error = git.update().unwrap_err();
+            let frork_error = error.downcast_ref::<FrorkError>().unwrap();
+            assert_eq!(
+                frork_error,
+                &FrorkError::UpdateRefused {
+                    path: path.display().to_string(),
+                    found: found.to_string(),
+                }
+            );
+            assert!(frork_error.help().is_some());
+        }
+        assert!(no_origin.join("file.txt").exists());
+        assert!(!no_origin.join(".git").exists());
+    }
+
+    #[test]
+    fn test_git_update_creates_when_absent_and_ignores_present() {
+        let dir = TempDir::new().unwrap();
+        let (git, clone) = pushed_clone(dir.path());
+        git.update().unwrap();
+        assert!(clone.join("tracked").exists());
+
+        let fresh = Git {
+            dir: expanded(&dir.path().join("fresh")),
+            remote_url: git.remote_url.clone(),
+        };
+        fresh.update().unwrap();
+        assert!(matches!(fresh.status().unwrap(), Status::Present));
     }
 
     #[test]
