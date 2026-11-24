@@ -1,3 +1,4 @@
+use clap::Args;
 use clap::CommandFactory;
 use clap::Parser;
 use clap::Subcommand;
@@ -5,6 +6,7 @@ use clap_complete::Shell;
 use frork_lib::assertions::Provider;
 use frork_lib::assertions::Status;
 use frork_lib::report;
+use frork_lib::runtime::StatusHandler;
 use frork_lib::runtime::run_code;
 use frork_lib::runtime::run_script;
 use miette::IntoDiagnostic as _;
@@ -29,10 +31,31 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Check { code: String },
-    Do { code: String },
-    Status { script: String },
-    Satisfy { script: String },
+    /// Report the status of each assertion.
+    Check(Source),
+    /// Create or update whatever doesn't match its assertion.
+    Apply(Source),
+}
+
+#[derive(Args)]
+#[group(required = true, multiple = false)]
+struct Source {
+    /// A Fennel script to evaluate.
+    script: Option<String>,
+
+    /// Fennel code to evaluate instead of a script.
+    #[arg(short = 'e', long = "eval", value_name = "CODE")]
+    code: Option<String>,
+}
+
+impl Source {
+    fn run(&self, handle_status: impl StatusHandler) -> Result<()> {
+        match (&self.script, &self.code) {
+            (Some(script), _) => run_script(script, handle_status),
+            (None, Some(code)) => run_code(code, handle_status),
+            (None, None) => unreachable!("clap requires a script or -e"),
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -66,33 +89,31 @@ fn main() -> Result<()> {
 
 fn run(command: &Commands) -> Result<()> {
     match command {
-        Commands::Check { code } => run_code(code, status),
-        Commands::Do { code } => run_code(code, satisfy),
-        Commands::Status { script } => run_script(script, status),
-        Commands::Satisfy { script } => run_script(script, satisfy),
+        Commands::Check(source) => source.run(check),
+        Commands::Apply(source) => source.run(apply),
     }
 }
 
-fn status(status: &Status, assertion: &dyn Provider) -> Result<()> {
+fn check(status: &Status, assertion: &dyn Provider) -> Result<()> {
     print_lines(&report::render(status, assertion));
     Ok(())
 }
 
-fn satisfy(status: &Status, assertion: &dyn Provider) -> Result<()> {
+fn apply(status: &Status, assertion: &dyn Provider) -> Result<()> {
     print_lines(&report::render(status, assertion));
 
     match status {
         Status::Present => {}
         Status::Absent => {
             assertion.create()?;
-            println!("ok: {assertion}");
+            print_lines(&report::render(&Status::Present, assertion));
         }
         Status::Drifted(_) => {
-            if report::wants_upgrade(&prompt("Upgrade? [y/N]: ")?) {
+            if report::wants_update(&prompt(&report::update_prompt(assertion))?) {
                 assertion.update()?;
-                println!("ok: {assertion}");
+                print_lines(&report::render(&Status::Present, assertion));
             } else {
-                println!("skipped: {assertion}");
+                println!("{}", report::kept(assertion));
             }
         }
     }

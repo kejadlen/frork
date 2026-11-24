@@ -333,6 +333,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "frork-lib",
+ "fs-err",
  "miette",
  "mlua",
  "predicates",

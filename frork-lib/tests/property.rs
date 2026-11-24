@@ -192,19 +192,19 @@ fn chomp_removes_exactly_the_trailing_newlines(tc: TestCase) {
 // --- update prompt ---
 
 #[hegel::test]
-fn wants_upgrade_accepts_only_y_or_yes(tc: TestCase) {
+fn wants_update_accepts_only_y_or_yes(tc: TestCase) {
     let s = tc.draw(text());
-    if report::wants_upgrade(&s) {
+    if report::wants_update(&s) {
         let normalized = s.trim().to_lowercase();
         assert!(
             normalized == "y" || normalized == "yes",
-            "wants_upgrade({s:?}) accepted something other than y/yes"
+            "wants_update({s:?}) accepted something other than y/yes"
         );
     }
 }
 
 #[hegel::test]
-fn wants_upgrade_accepts_y_or_yes_in_any_case_and_padding(tc: TestCase) {
+fn wants_update_accepts_y_or_yes_in_any_case_and_padding(tc: TestCase) {
     let word = tc.draw(gs::sampled_from(vec!["y", "yes"]));
     let uppercase = tc.draw(
         gs::vecs(gs::booleans())
@@ -220,7 +220,7 @@ fn wants_upgrade_accepts_y_or_yes_in_any_case_and_padding(tc: TestCase) {
     let after = tc.draw(text().alphabet(WHITESPACE));
 
     let reply = format!("{before}{cased}{after}");
-    assert!(report::wants_upgrade(&reply), "{reply:?} was declined");
+    assert!(report::wants_update(&reply), "{reply:?} was declined");
 }
 
 // --- expand_path ---
@@ -371,18 +371,30 @@ fn lua_utils_agree_with_their_rust_functions(tc: TestCase) {
 // --- report::render ---
 
 #[hegel::test]
-fn render_prefixes_present_and_absent_with_their_status(tc: TestCase) {
+fn render_repeats_the_declaration_and_suffixes_absence(tc: TestCase) {
     let display = tc.draw(text());
     let assertion = Named(display.clone());
 
     assert_eq!(
         report::render(&Status::Present, &assertion),
-        [format!("ok: {display}")]
+        [format!("ok {display}")]
     );
     assert_eq!(
         report::render(&Status::Absent, &assertion),
-        [format!("missing: {display}")]
+        [format!("ok {display}: absent")]
     );
+}
+
+#[hegel::test]
+fn update_prompt_and_kept_name_the_assertion(tc: TestCase) {
+    let display = tc.draw(text());
+    let assertion = Named(display.clone());
+
+    assert_eq!(
+        report::update_prompt(&assertion),
+        format!("Update {display}? [y/N] ")
+    );
+    assert_eq!(report::kept(&assertion), format!("kept: {display}"));
 }
 
 #[hegel::test]
@@ -398,7 +410,7 @@ fn render_shows_both_sides_of_a_drift_verbatim(tc: TestCase) {
     assert_eq!(
         report::render(&status, &Named(display.clone())),
         [
-            format!("conflict (upgradable): {display}"),
+            format!("ok {display}: drifted"),
             format!("  expected: {expected}"),
             format!("    actual: {actual}"),
         ]

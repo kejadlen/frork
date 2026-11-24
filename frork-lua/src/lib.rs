@@ -6,23 +6,27 @@ use mlua::prelude::*;
 
 // The frork engine as a Lua module, `require("frork")`. Linked statically
 // into a binary from `fennel --compile-binary --native-module`, it turns a
-// Fennel script into a standalone executable: `--satisfy` creates absent
+// Fennel script into a standalone executable: `--apply` creates absent
 // assertions, otherwise they are only reported.
 
 #[mlua::lua_module]
 fn frork(lua: &Lua) -> LuaResult<LuaTable> {
-    let satisfy = std::env::args().any(|arg| arg == "--satisfy");
+    let apply = std::env::args().any(|arg| arg == "--apply");
     let handler = move |status: &Status, assertion: &dyn Provider| {
-        for line in report::render(status, assertion) {
-            println!("{line}");
-        }
-        if satisfy && matches!(status, Status::Absent) {
+        print_lines(&report::render(status, assertion));
+        if apply && matches!(status, Status::Absent) {
             assertion.create()?;
-            println!("ok: {assertion}");
+            print_lines(&report::render(&Status::Present, assertion));
         }
         Ok(())
     };
     let exports = frork_module(lua, handler)?;
     exports.set("VERSION", frork_lib::VERSION)?;
     Ok(exports)
+}
+
+fn print_lines(lines: &[String]) {
+    for line in lines {
+        println!("{line}");
+    }
 }
