@@ -318,6 +318,28 @@ mod tests {
     }
 
     #[test]
+    fn test_frork_module_lets_the_lua_state_drop() {
+        let (_seen, handler) = recorder();
+        let lua = Lua::new();
+        let weak = lua.weak();
+
+        let frork = frork_module(&lua, handler).unwrap();
+        lua.globals().set("frork", frork).unwrap();
+        lua.load(
+            r#"frork.register("custom", {
+                 status = function() return "ok" end,
+                 install = function() end,
+               })
+               frork.ok("custom")"#,
+        )
+        .exec()
+        .unwrap();
+        drop(lua);
+
+        assert!(weak.try_upgrade().is_none());
+    }
+
+    #[test]
     fn test_run_script_accepts_a_path_with_a_double_quote() {
         let dir = TempDir::new().unwrap();
         let quoted = dir.path().join(r#"we"ird"#);
