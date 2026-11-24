@@ -160,6 +160,9 @@ impl AssertionType for Symlink {
 
     fn install(&self) -> Result<()> {
         use std::os::unix::fs;
+        if !Path::new(&self.source).exists() {
+            return Err(miette!("Symlink source '{}' does not exist", self.source));
+        }
         fs::symlink(&self.source, &self.target)
             .map_err(|e| miette!("Failed to create symlink: {e}"))?;
         debug!("created: {}", self);
@@ -773,13 +776,29 @@ mod tests {
     #[test]
     fn test_symlink_install_failure() {
         let dir = TempDir::new().unwrap();
+        let source = dir.path().join("source.txt");
+        fs::write(&source, "").unwrap();
         let symlink = Symlink {
             target: expanded(&dir.path().join("missing-parent/link")),
-            source: expanded(&dir.path().join("source.txt")),
+            source: expanded(&source),
         };
 
         let error = symlink.install().unwrap_err();
         assert!(error.to_string().contains("Failed to create symlink"));
+    }
+
+    #[test]
+    fn test_symlink_install_requires_the_source() {
+        let dir = TempDir::new().unwrap();
+        let symlink = Symlink {
+            target: expanded(&dir.path().join("link")),
+            source: expanded(&dir.path().join("never-created")),
+        };
+
+        let error = symlink.install().unwrap_err();
+        assert!(error.to_string().contains("does not exist"));
+        // A failed install leaves the link uncreated.
+        assert!(matches!(symlink.status().unwrap(), Status::Missing));
     }
 
     #[test]

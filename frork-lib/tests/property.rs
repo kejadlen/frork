@@ -606,14 +606,12 @@ fn directory_install_satisfies_any_nested_path(tc: TestCase) {
 }
 
 #[hegel::test]
-fn symlink_install_satisfies_status_whether_or_not_the_source_exists(tc: TestCase) {
+fn symlink_install_satisfies_status_when_the_source_exists(tc: TestCase) {
     let root = TempDir::new().unwrap();
     let sources = root.path().join("sources");
     fs::create_dir(&sources).unwrap();
     let source = sources.join(tc.draw(path_component()));
-    if tc.draw(gs::booleans()) {
-        fs::write(&source, "").unwrap();
-    }
+    fs::write(&source, "").unwrap();
     let symlink = Symlink {
         target: expanded(&root.path().join("link")),
         source: expanded(&source),
@@ -622,6 +620,24 @@ fn symlink_install_satisfies_status_whether_or_not_the_source_exists(tc: TestCas
     assert!(matches!(symlink.status().unwrap(), Status::Missing));
     symlink.install().unwrap();
     assert!(matches!(symlink.status().unwrap(), Status::Ok));
+}
+
+#[hegel::test]
+fn symlink_install_requires_the_source_to_exist(tc: TestCase) {
+    let root = TempDir::new().unwrap();
+    let sources = root.path().join("sources");
+    fs::create_dir(&sources).unwrap();
+    let source = sources.join(tc.draw(path_component()));
+    let symlink = Symlink {
+        target: expanded(&root.path().join("link")),
+        source: expanded(&source),
+    };
+
+    let error = symlink.install().unwrap_err();
+    assert!(
+        error.to_string().contains("does not exist"),
+        "for {source:?}"
+    );
 }
 
 /// A remote URL git will store and hand back unchanged: no control
