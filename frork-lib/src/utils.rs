@@ -179,9 +179,9 @@ impl Utils {
             "Command '{}' completed with status {}, stdout: {}",
             // The subscriber test exercises these, but nightly maps the
             // lazy format regions to a counter that never fires.
-            cmd,
-            status,
-            trimmed // cov-excl-line
+            cmd,     // cov-excl-line
+            status,  // cov-excl-line
+            trimmed  // cov-excl-line
         );
         Ok((stdout, status))
     }
