@@ -97,6 +97,12 @@ impl Utils {
     }
 
     pub fn expand_path(path: &str) -> Result<String> {
+        Self::expand_path_with(path, |name| env::var(name).ok())
+    }
+
+    /// Expands `~` and `$VAR` references against the given lookup rather
+    /// than the process environment.
+    pub fn expand_path_with(path: &str, lookup: impl Fn(&str) -> Option<String>) -> Result<String> {
         // The pattern is a literal, so it either always compiles or never does.
         #[allow(clippy::unwrap_used)]
         static ENV_VAR_REGEX: LazyLock<Regex> =
@@ -106,7 +112,7 @@ impl Utils {
 
         if expanded.starts_with('~') {
             let home =
-                env::var("HOME").map_err(|_| miette!("HOME environment variable not set"))?;
+                lookup("HOME").ok_or_else(|| miette!("HOME environment variable not set"))?;
             expanded = expanded.replacen('~', &home, 1);
         }
 
@@ -116,9 +122,9 @@ impl Utils {
         #[allow(clippy::unwrap_used)]
         let replaced = ENV_VAR_REGEX.replace_all(&expanded, |caps: &regex::Captures| {
             let var_name = caps.get(1).unwrap().as_str();
-            match env::var(var_name) {
-                Ok(value) => value,
-                Err(_) => {
+            match lookup(var_name) {
+                Some(value) => value,
+                None => {
                     missing.push(var_name.to_string());
                     caps.get(0).unwrap().as_str().to_string()
                 }
@@ -263,27 +269,30 @@ mod tests {
     use super::*;
     use std::env;
 
-    #[test]
-    fn test_expand_path_with_multiple_env_vars() {
-        unsafe {
-            env::set_var("TEST_VAR1", "value1");
-            env::set_var("TEST_VAR2", "value2");
-        }
-        let result = Utils::expand_path("/$TEST_VAR1/path/$TEST_VAR2/file");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "/value1/path/value2/file");
-        unsafe {
-            env::remove_var("TEST_VAR1");
-            env::remove_var("TEST_VAR2");
+    /// A lookup backed by fixed pairs, standing in for the process
+    /// environment so tests never mutate it.
+    fn lookup_from<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |name| {
+            vars.iter()
+                .find(|(k, _)| *k == name)
+                .map(|(_, v)| v.to_string())
         }
     }
 
     #[test]
+    fn test_expand_path_with_multiple_env_vars() {
+        let vars = [("TEST_VAR1", "value1"), ("TEST_VAR2", "value2")];
+        let result =
+            Utils::expand_path_with("/$TEST_VAR1/path/$TEST_VAR2/file", lookup_from(&vars));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "/value1/path/value2/file");
+    }
+
+    #[test]
     fn test_expand_path_mixed_existing_and_missing() {
-        unsafe {
-            env::set_var("EXISTING_VAR", "exists");
-        }
-        let result = Utils::expand_path("/$EXISTING_VAR/path/$MISSING_VAR/file");
+        let vars = [("EXISTING_VAR", "exists")];
+        let result =
+            Utils::expand_path_with("/$EXISTING_VAR/path/$MISSING_VAR/file", lookup_from(&vars));
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert!(
@@ -291,23 +300,24 @@ mod tests {
                 .to_string()
                 .contains("Environment variables not found: MISSING_VAR")
         );
-        unsafe {
-            env::remove_var("EXISTING_VAR");
-        }
     }
 
     #[test]
     fn test_expand_path_tilde_and_env_var() {
-        let home = env::var("HOME").unwrap();
-        unsafe {
-            env::set_var("TEST_VAR", "test");
-        }
-        let result = Utils::expand_path("~/$TEST_VAR/file");
+        let vars = [("HOME", "/home/user"), ("TEST_VAR", "test")];
+        let result = Utils::expand_path_with("~/$TEST_VAR/file", lookup_from(&vars));
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), format!("{}/test/file", home));
-        unsafe {
-            env::remove_var("TEST_VAR");
-        }
+        assert_eq!(result.unwrap(), "/home/user/test/file");
+    }
+
+    #[test]
+    fn test_expand_path_without_home() {
+        let error = Utils::expand_path_with("~/x", |_| None).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("HOME environment variable not set")
+        );
     }
 
     #[test]
@@ -363,30 +373,22 @@ mod tests {
 
     #[test]
     fn test_expanded_path_conversions() {
-        unsafe {
-            env::set_var("EXPANDED_PATH_VAR", "expanded");
-        }
+        // Reading the environment is thread-safe; only mutation is not.
+        let expected = format!("/tmp/{}", env::var("HOME").unwrap());
 
-        let path = ExpandedPath::new("/tmp/$EXPANDED_PATH_VAR").unwrap();
+        let path = ExpandedPath::new("/tmp/$HOME").unwrap();
 
-        assert_eq!(path.as_str(), "/tmp/expanded");
-        assert_eq!(&*path, "/tmp/expanded");
-        assert_eq!(AsRef::<str>::as_ref(&path), "/tmp/expanded");
-        assert_eq!(AsRef::<OsStr>::as_ref(&path), OsStr::new("/tmp/expanded"));
-        assert_eq!(AsRef::<Path>::as_ref(&path), Path::new("/tmp/expanded"));
-        assert_eq!(path.to_string(), "/tmp/expanded");
+        assert_eq!(path.as_str(), expected);
+        assert_eq!(&*path, expected);
+        assert_eq!(AsRef::<str>::as_ref(&path), expected);
+        assert_eq!(AsRef::<OsStr>::as_ref(&path), OsStr::new(&expected));
+        assert_eq!(AsRef::<Path>::as_ref(&path), Path::new(&expected));
+        assert_eq!(path.to_string(), expected);
 
-        assert_eq!(
-            "/tmp/$EXPANDED_PATH_VAR".parse::<ExpandedPath>().unwrap(),
-            path
-        );
+        assert_eq!("/tmp/$HOME".parse::<ExpandedPath>().unwrap(), path);
 
-        assert_eq!(String::from(path.clone()), "/tmp/expanded");
-        assert_eq!(path.into_string(), "/tmp/expanded");
-
-        unsafe {
-            env::remove_var("EXPANDED_PATH_VAR");
-        }
+        assert_eq!(String::from(path.clone()), expected);
+        assert_eq!(path.into_string(), expected);
     }
 
     #[test]

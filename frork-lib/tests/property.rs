@@ -244,10 +244,6 @@ fn expand_path_replaces_a_leading_tilde_with_home(tc: TestCase) {
 
 #[hegel::test]
 fn expand_path_substitutes_a_variable_with_its_value_verbatim(tc: TestCase) {
-    let name = format!(
-        "FRORK_PBT_SET_{}",
-        tc.draw(gs::from_regex("[A-Za-z0-9_]{0,8}"))
-    );
     // A `$` reference inside the value must survive: expansion is one pass.
     let value = format!(
         "{}{}",
@@ -264,12 +260,10 @@ fn expand_path_substitutes_a_variable_with_its_value_verbatim(tc: TestCase) {
             .exclude_characters("$")
             .filter(|s: &String| !s.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')),
     );
-    // SAFETY: each test uses its own variable prefix, and std serialises its
-    // own environment access.
-    unsafe { env::set_var(&name, &value) };
+    let lookup = |name: &str| (name == "FRORK_PBT_SET").then(|| value.clone());
 
     assert_eq!(
-        Utils::expand_path(&format!("{prefix}${name}{suffix}")).unwrap(),
+        Utils::expand_path_with(&format!("{prefix}$FRORK_PBT_SET{suffix}"), lookup).unwrap(),
         format!("{prefix}{value}{suffix}")
     );
 }
@@ -288,7 +282,7 @@ fn expand_path_names_every_missing_variable(tc: TestCase) {
         .collect();
     let path: String = names.iter().map(|n| format!("/${n}")).collect();
 
-    let error = Utils::expand_path(&path).unwrap_err();
+    let error = Utils::expand_path_with(&path, |_| None).unwrap_err();
     assert_eq!(
         error.to_string(),
         format!("Environment variables not found: {}", names.join(", "))
@@ -297,9 +291,7 @@ fn expand_path_names_every_missing_variable(tc: TestCase) {
 
 #[hegel::test]
 fn expanded_path_entry_points_agree_with_expand_path(tc: TestCase) {
-    // SAFETY: see expand_path_substitutes_a_variable_with_its_value_verbatim.
-    unsafe { env::set_var("FRORK_PBT_AGREE", "agreed") };
-    let path = pathish(&tc, &["$FRORK_PBT_AGREE", "$FRORK_PBT_UNSET_AGREE"]);
+    let path = pathish(&tc, &["$HOME", "$FRORK_PBT_UNSET_AGREE"]);
     let expected = Utils::expand_path(&path).ok();
 
     let lua = Lua::new();
