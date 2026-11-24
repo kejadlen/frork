@@ -210,15 +210,18 @@ impl AssertionType for Directory {
     fn status(&self) -> Result<Status> {
         let path = Path::new(&self.path);
         if path.is_dir() {
-            Ok(Status::Ok)
-        } else if path.exists() {
-            Ok(Status::ConflictUpgrade(Conflict {
-                expected: "directory".to_string(),
-                actual: "file".to_string(),
-            }))
-        } else {
-            Ok(Status::Missing)
+            return Ok(Status::Ok);
         }
+
+        // Unlike `Path::exists`, this doesn't follow the link, so a dangling
+        // link reads as something in the way rather than nothing there.
+        let Ok(metadata) = fs::symlink_metadata(path) else {
+            return Ok(Status::Missing);
+        };
+        Ok(Status::ConflictUpgrade(Conflict {
+            expected: "directory".to_string(),
+            actual: file_kind(metadata.file_type()).to_string(),
+        }))
     }
 
     fn install(&self) -> Result<()> {
@@ -232,6 +235,25 @@ impl AssertionType for Directory {
         todo!()
     }
     // cov-excl-stop
+}
+
+/// Names what occupies a path that should hold something else.
+fn file_kind(file_type: std::fs::FileType) -> &'static str {
+    use std::os::unix::fs::FileTypeExt as _;
+    if file_type.is_symlink() {
+        "symlink"
+    } else if file_type.is_file() {
+        "file"
+    } else if file_type.is_fifo() {
+        "fifo"
+    } else if file_type.is_socket() {
+        "socket"
+    } else if file_type.is_block_device() || file_type.is_char_device() {
+        "device"
+    } else {
+        // Only a directory is left, which callers have already ruled out.
+        "directory" // cov-excl-line
+    }
 }
 
 pub struct Git {
@@ -867,20 +889,52 @@ mod tests {
 
     // --- Directory ---
 
-    #[test]
-    fn test_directory_status_conflicts() {
-        let dir = TempDir::new().unwrap();
-        let file = dir.path().join("a-file");
-        fs::write(&file, "content").unwrap();
-
+    fn directory_conflict(path: &Path) -> Conflict {
         let directory = Directory {
-            path: expanded(&file),
+            path: expanded(path),
         };
         let Status::ConflictUpgrade(conflict) = directory.status().unwrap() else {
-            panic!("expected a conflict for a non-directory path"); // cov-excl-line
+            panic!("expected a conflict for {path:?}"); // cov-excl-line
         };
         assert_eq!(conflict.expected, "directory");
-        assert_eq!(conflict.actual, "file");
+        conflict
+    }
+
+    #[test]
+    fn test_directory_status_names_what_is_in_the_way() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("file");
+        fs::write(&file, "content").unwrap();
+        let to_file = dir.path().join("to-file");
+        symlink(&file, &to_file).unwrap();
+        let dangling = dir.path().join("dangling");
+        symlink(dir.path().join("nowhere"), &dangling).unwrap();
+        let fifo = dir.path().join("fifo");
+        let mkfifo = std::process::Command::new("mkfifo").arg(&fifo).status();
+        assert!(mkfifo.unwrap().success());
+        let socket = dir.path().join("socket");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+
+        assert_eq!(directory_conflict(&file).actual, "file");
+        assert_eq!(directory_conflict(&to_file).actual, "symlink");
+        assert_eq!(directory_conflict(&dangling).actual, "symlink");
+        assert_eq!(directory_conflict(&fifo).actual, "fifo");
+        assert_eq!(directory_conflict(&socket).actual, "socket");
+        assert_eq!(directory_conflict(Path::new("/dev/null")).actual, "device");
+    }
+
+    #[test]
+    fn test_directory_status_follows_a_link_to_a_directory() {
+        let dir = TempDir::new().unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(dir.path(), &link).unwrap();
+
+        let directory = Directory {
+            path: expanded(&link),
+        };
+        assert!(matches!(directory.status().unwrap(), Status::Ok));
     }
 
     #[test]
