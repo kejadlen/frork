@@ -40,7 +40,7 @@ frork-lib/
   fennel-1.6.0.lua         # Vendored Fennel compiler
   src/
     lib.rs                 # Library root — re-exports modules
-    assertions.rs          # Built-in providers and the Provider trait
+    assertions.rs          # Built-in providers and the Assertion trait
     error.rs               # thiserror + miette::Diagnostic enum (FrorkError)
     registry.rs            # Provider name to factory dispatch
     report.rs              # Status wording and update-prompt parsing
@@ -95,7 +95,7 @@ Releases run on green main builds and attach tarballs for aarch64 macOS and aarc
 
 `bin/coverage` measures library line coverage with grcov and gates on `COVERAGE_THRESHOLD`, which defaults to 100. The library is at 100% — keep it there rather than lowering the gate.
 
-Unimplemented stubs are excluded rather than counted: the `--excl-line` pattern covers `todo!` alongside `unreachable!` and the explicit `cov-excl-line` marker. An unimplemented method sits inside a `cov-excl-start`/`cov-excl-stop` pair because a function signature carries its own counter that no line pattern can match — the per-impl `update` stubs and the default `remove` on `Provider` all do this. A trailing `// cov-excl-line` on the signature won't work either: rustfmt moves it to its own line inside the body.
+Unimplemented stubs are excluded rather than counted: the `--excl-line` pattern covers `todo!` alongside `unreachable!` and the explicit `cov-excl-line` marker. An unimplemented method sits inside a `cov-excl-start`/`cov-excl-stop` pair because a function signature carries its own counter that no line pattern can match — the per-impl `update` stubs and the default `remove` on `Assertion` all do this. A trailing `// cov-excl-line` on the signature won't work either: rustfmt moves it to its own line inside the body.
 
 Coverage regions land on their own line in two cases worth knowing, since both look like untestable code and are neither:
 
@@ -121,7 +121,7 @@ A `--completions <shell>` flag generates shell completions and exits.
 
 ### Provider model
 
-Each line in a script is an assertion, and its first argument names the provider that inspects and changes that sort of system state. Each provider implements the `Provider` trait (`status`, `create`, `update`, `remove`). Status returns `Present`, `Absent`, or `Drifted(Drift)`, where `Drift` carries `expected` and `actual` strings.
+Each line in a script is an assertion, and its first argument names the provider that inspects and changes that sort of system state. Each built-in is a struct holding one assertion's arguments and implementing the `Assertion` trait (`status`, `create`, `update`, `remove`). Status returns `Present`, `Absent`, or `Drifted(Drift)`, where `Drift` carries `expected` and `actual` strings.
 
 Built-in providers:
 
@@ -160,7 +160,7 @@ On the Rust side, `ExpandedPath` handles `~` and `$ENV_VAR` expansion at the Lua
 
 ### Custom providers
 
-Fennel scripts can define providers via `frork.provide(name, {status=fn, create=fn, update=fn, display=fn})`. Each becomes a `LuaProvider` holding those hooks, and every assertion that names it is a `LuaAssertion` dispatched through the same `Provider` trait. The status function returns `present`, `absent`, or `drifted` plus an `{expected, actual}` table. The optional `update` function runs on a `drifted` status when the user answers yes to the update prompt; when absent, updating falls back to `create`. The optional `display` function controls how the assertion is printed.
+Fennel scripts can define providers via `frork.provide(name, {status=fn, create=fn, update=fn, display=fn})`. Each becomes a `LuaProvider` holding those hooks, and every assertion that names it is a `LuaAssertion` dispatched through the same `Assertion` trait. The status function returns `present`, `absent`, or `drifted` plus an `{expected, actual}` table. The optional `update` function runs on a `drifted` status when the user answers yes to the update prompt; when absent, updating falls back to `create`. The optional `display` function controls how the assertion is printed.
 
 ### frork-lib, frork-cli and frork-lua
 

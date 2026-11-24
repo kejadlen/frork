@@ -1,4 +1,4 @@
-use frork_lib::assertions::Provider;
+use frork_lib::assertions::Assertion;
 use frork_lib::assertions::Status;
 use frork_lib::report;
 use frork_lib::runtime::frork_module;
@@ -12,7 +12,7 @@ use mlua::prelude::*;
 #[mlua::lua_module]
 fn frork(lua: &Lua) -> LuaResult<LuaTable> {
     let apply = std::env::args().any(|arg| arg == "--apply");
-    let handler = move |status: &Status, assertion: &dyn Provider| {
+    let handler = move |status: &Status, assertion: &dyn Assertion| {
         print_lines(&report::render(status, assertion));
         if apply && matches!(status, Status::Absent) {
             assertion.create()?;

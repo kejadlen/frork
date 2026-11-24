@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use miette::Result;
 use mlua::prelude::*;
 
+use crate::assertions::Assertion;
 use crate::assertions::Brew;
 use crate::assertions::BrewBundle;
 use crate::assertions::Debug;
@@ -10,7 +11,6 @@ use crate::assertions::Directory;
 use crate::assertions::Git;
 use crate::assertions::LuaAssertion;
 use crate::assertions::LuaProvider;
-use crate::assertions::Provider;
 use crate::assertions::ProviderFactory;
 use crate::assertions::Symlink;
 use crate::assertions::TypedFactory;
@@ -57,7 +57,7 @@ struct LuaAssertionFactory {
 }
 
 impl ProviderFactory for LuaAssertionFactory {
-    fn build(&self, _lua: &Lua, args: LuaMultiValue) -> Result<Box<dyn Provider>> {
+    fn build(&self, _lua: &Lua, args: LuaMultiValue) -> Result<Box<dyn Assertion>> {
         Ok(Box::new(LuaAssertion::new(
             &self.name,
             args,

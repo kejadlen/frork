@@ -3,7 +3,7 @@ use clap::CommandFactory;
 use clap::Parser;
 use clap::Subcommand;
 use clap_complete::Shell;
-use frork_lib::assertions::Provider;
+use frork_lib::assertions::Assertion;
 use frork_lib::assertions::Status;
 use frork_lib::report;
 use frork_lib::runtime::StatusHandler;
@@ -94,12 +94,12 @@ fn run(command: &Commands) -> Result<()> {
     }
 }
 
-fn check(status: &Status, assertion: &dyn Provider) -> Result<()> {
+fn check(status: &Status, assertion: &dyn Assertion) -> Result<()> {
     print_lines(&report::render(status, assertion));
     Ok(())
 }
 
-fn apply(status: &Status, assertion: &dyn Provider) -> Result<()> {
+fn apply(status: &Status, assertion: &dyn Assertion) -> Result<()> {
     match status {
         Status::Present => print_lines(&report::render(status, assertion)),
         Status::Absent => {

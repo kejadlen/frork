@@ -1,9 +1,9 @@
-use crate::assertions::Provider;
+use crate::assertions::Assertion;
 use crate::assertions::Status;
 
 /// Renders an assertion's status as the lines the CLI prints. Kept apart from
 /// the printing itself so the wording is testable.
-pub fn render(status: &Status, assertion: &dyn Provider) -> Vec<String> {
+pub fn render(status: &Status, assertion: &dyn Assertion) -> Vec<String> {
     match status {
         Status::Present => vec![format!("ok {assertion}")],
         Status::Absent => vec![format!("ok {assertion}: absent")],

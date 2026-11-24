@@ -16,12 +16,12 @@ use std::env;
 use std::path::Path;
 use std::rc::Rc;
 
+use frork_lib::assertions::Assertion;
 use frork_lib::assertions::Directory;
 use frork_lib::assertions::Drift;
 use frork_lib::assertions::Git;
 use frork_lib::assertions::LuaAssertion;
 use frork_lib::assertions::LuaProvider;
-use frork_lib::assertions::Provider;
 use frork_lib::assertions::Status;
 use frork_lib::assertions::Symlink;
 use frork_lib::error::FrorkError;
@@ -112,7 +112,7 @@ type Recorded = Rc<RefCell<Vec<String>>>;
 fn recorder() -> (Recorded, impl runtime::StatusHandler) {
     let seen: Recorded = Rc::new(RefCell::new(Vec::new()));
     let sink = seen.clone();
-    let handler = move |status: &Status, assertion: &dyn Provider| {
+    let handler = move |status: &Status, assertion: &dyn Assertion| {
         sink.borrow_mut().push(format!("{status:?}: {assertion}"));
         Ok(())
     };
@@ -128,7 +128,7 @@ impl std::fmt::Display for Named {
     }
 }
 
-impl Provider for Named {
+impl Assertion for Named {
     fn status(&self) -> miette::Result<Status> {
         Ok(Status::Present)
     }

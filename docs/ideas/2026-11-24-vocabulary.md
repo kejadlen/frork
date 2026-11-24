@@ -97,7 +97,7 @@ that knows how to inspect and change one sort of system state.
 - `frork.register` becomes `frork.provide`.
 - Errors read `unknown provider :symlnk`.
 - Docs say "Built-in providers" and "Writing a provider".
-- In Rust, `AssertionType` becomes `Provider` and `Registry` becomes
+- In Rust, `AssertionType` becomes `Assertion` and `Registry` becomes
   `Providers`.
 
 Terraform uses "provider" for a whole plugin bundle, which is the one

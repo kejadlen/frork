@@ -6,8 +6,8 @@ use miette::miette;
 use mlua::prelude::*;
 use tracing::info;
 
+use crate::assertions::Assertion;
 use crate::assertions::LuaProvider;
-use crate::assertions::Provider;
 use crate::assertions::Status;
 use crate::error::FrorkError;
 use crate::registry::Providers;
@@ -15,9 +15,9 @@ use crate::utils::Utils;
 
 /// Handles each assertion's status once it has been evaluated. The binary
 /// supplies the rendering and any prompting; nothing here writes to stdout.
-pub trait StatusHandler: Fn(&Status, &dyn Provider) -> Result<()> + Clone + 'static {}
+pub trait StatusHandler: Fn(&Status, &dyn Assertion) -> Result<()> + Clone + 'static {}
 
-impl<T> StatusHandler for T where T: Fn(&Status, &dyn Provider) -> Result<()> + Clone + 'static {}
+impl<T> StatusHandler for T where T: Fn(&Status, &dyn Assertion) -> Result<()> + Clone + 'static {}
 
 /// Evaluates inline Fennel code.
 pub fn run_code(code: &str, handle_status: impl StatusHandler) -> Result<()> {
@@ -203,7 +203,7 @@ mod tests {
     fn recorder() -> (Recorded, impl StatusHandler) {
         let seen: Recorded = Rc::new(RefCell::new(Vec::new()));
         let sink = seen.clone();
-        let handler = move |status: &Status, assertion: &dyn Provider| {
+        let handler = move |status: &Status, assertion: &dyn Assertion| {
             sink.borrow_mut().push(format!("{status:?}: {assertion}"));
             Ok(())
         };
@@ -275,7 +275,8 @@ mod tests {
 
     #[test]
     fn test_run_code_propagates_handler_failures() {
-        let handler = |_status: &Status, _assertion: &dyn Provider| Err(miette!("handler said no"));
+        let handler =
+            |_status: &Status, _assertion: &dyn Assertion| Err(miette!("handler said no"));
 
         assert!(run_code(r#"(ok :directory "/tmp")"#, handler).is_err());
     }

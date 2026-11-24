@@ -6,19 +6,19 @@ exclude_re = [
     # the todo!() with Ok(()) cannot be observed. Drop an entry when that
     # provider's update is implemented, at the same point its cov-excl markers
     # in assertions.rs go. remove still defaults on the trait.
-    "impl Provider for Symlink>::update",
-    "impl Provider for Directory>::update",
-    "impl Provider for Git>::update",
-    "impl Provider for Brew<R>>::update",
-    "impl Provider for BrewBundle<R>>::update",
-    "impl Provider for Debug>::update",
-    "Provider::remove",
+    "impl Assertion for Symlink>::update",
+    "impl Assertion for Directory>::update",
+    "impl Assertion for Git>::update",
+    "impl Assertion for Brew<R>>::update",
+    "impl Assertion for BrewBundle<R>>::update",
+    "impl Assertion for Debug>::update",
+    "Assertion::remove",
 
     # BrewBundle's status and create exist twice, split on
     # #[cfg(target_os = "macos")]. cargo-mutants cannot tell which half is
     # compiled, so it always reports the inactive one as missed.
-    "impl Provider for BrewBundle<R>>::status",
-    "impl Provider for BrewBundle<R>>::create",
+    "impl Assertion for BrewBundle<R>>::status",
+    "impl Assertion for BrewBundle<R>>::create",
 ]
 
 # main.rs is I/O only — argument parsing, println!, and the stdin prompt.

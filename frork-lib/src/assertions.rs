@@ -15,7 +15,7 @@ use crate::error::FrorkError;
 use crate::utils::ExpandedPath;
 use crate::utils::Utils;
 
-pub trait Provider: std::fmt::Display {
+pub trait Assertion: std::fmt::Display {
     fn status(&self) -> Result<Status>;
     fn create(&self) -> Result<()>;
     fn update(&self) -> Result<()>;
@@ -84,7 +84,7 @@ impl FromLua for Drift {
 }
 
 pub trait ProviderFactory {
-    fn build(&self, lua: &Lua, args: LuaMultiValue) -> Result<Box<dyn Provider>>;
+    fn build(&self, lua: &Lua, args: LuaMultiValue) -> Result<Box<dyn Assertion>>;
 }
 
 pub struct TypedFactory<T>(std::marker::PhantomData<T>);
@@ -103,11 +103,11 @@ impl<T> Default for TypedFactory<T> {
 
 impl<T> ProviderFactory for TypedFactory<T>
 where
-    T: Provider + FromLuaMulti + 'static,
+    T: Assertion + FromLuaMulti + 'static,
 {
-    fn build(&self, lua: &Lua, args: LuaMultiValue) -> Result<Box<dyn Provider>> {
+    fn build(&self, lua: &Lua, args: LuaMultiValue) -> Result<Box<dyn Assertion>> {
         T::from_lua_multi(args, lua)
-            .map(|t| Box::new(t) as Box<dyn Provider>)
+            .map(|t| Box::new(t) as Box<dyn Assertion>)
             .map_err(|e| miette!("Failed to create assertion: {e}"))
     }
 }
@@ -141,7 +141,7 @@ impl std::fmt::Display for Symlink {
     }
 }
 
-impl Provider for Symlink {
+impl Assertion for Symlink {
     fn status(&self) -> Result<Status> {
         // Unlike `Path::exists`, this doesn't follow the link, so a link to a
         // source that doesn't exist yet still counts as present.
@@ -203,7 +203,7 @@ impl std::fmt::Display for Directory {
     }
 }
 
-impl Provider for Directory {
+impl Assertion for Directory {
     fn status(&self) -> Result<Status> {
         let path = Path::new(&self.path);
         if path.is_dir() {
@@ -271,7 +271,7 @@ impl std::fmt::Display for Git {
     }
 }
 
-impl Provider for Git {
+impl Assertion for Git {
     fn status(&self) -> Result<Status> {
         Utils::assert_bin("git")?;
 
@@ -405,7 +405,7 @@ impl<R> std::fmt::Display for Brew<R> {
     }
 }
 
-impl<R: CommandRunner> Provider for Brew<R> {
+impl<R: CommandRunner> Assertion for Brew<R> {
     fn status(&self) -> Result<Status> {
         if !self.runner.has_bin("brew") {
             return Ok(Status::Absent);
@@ -465,7 +465,7 @@ impl<R> std::fmt::Display for BrewBundle<R> {
     }
 }
 
-impl<R: CommandRunner> Provider for BrewBundle<R> {
+impl<R: CommandRunner> Assertion for BrewBundle<R> {
     #[cfg(not(target_os = "macos"))]
     fn status(&self) -> Result<Status> {
         Err(miette!("brew-bundle only supported on Darwin/macOS"))
@@ -554,7 +554,7 @@ impl std::fmt::Display for Debug {
     }
 }
 
-impl Provider for Debug {
+impl Assertion for Debug {
     fn status(&self) -> Result<Status> {
         if let Some(ref status_fn) = self.status_fn {
             let result = status_fn
@@ -656,7 +656,7 @@ impl std::fmt::Display for LuaAssertion {
     }
 }
 
-impl Provider for LuaAssertion {
+impl Assertion for LuaAssertion {
     fn status(&self) -> Result<Status> {
         let result = self
             .provider
@@ -757,7 +757,7 @@ mod tests {
         let lua = Lua::new();
         let factory: TypedFactory<Directory> = TypedFactory::new();
 
-        // Box<dyn Provider> is not Debug, so unwrap_err is unavailable.
+        // Box<dyn Assertion> is not Debug, so unwrap_err is unavailable.
         let Err(error) = factory.build(&lua, multi(&lua, r#"return true"#)) else {
             panic!("expected a conversion failure"); // cov-excl-line
         };
