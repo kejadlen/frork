@@ -187,3 +187,92 @@ fn apply_updates_a_drift_when_accepted() {
         .stdout(format!("{DRIFTED}  updated\n"));
     assert!(marker.exists());
 }
+
+/// A `no` assertion on a debug provider with the given status, whose remove
+/// leaves a marker file so a test can tell whether it ran.
+fn no_fixture(status: &str) -> (tempfile::TempDir, std::path::PathBuf, String) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let marker = dir.path().join("removed");
+    let code = format!(
+        r#"(no :debug {{:status (fn [] {status})
+                      :remove (fn [] (: (io.open "{}" :w) :close))}})"#,
+        marker.display()
+    );
+    (dir, marker, code)
+}
+
+const NO_DRIFTED: &str = r#"(values :drifted {:expected "gone" :actual "here"})"#;
+
+#[test]
+fn check_reports_no_assertions_without_removing() {
+    for (status, stdout) in [
+        (":present", "no debug: present\n"),
+        (":absent", "no debug\n"),
+        (
+            NO_DRIFTED,
+            "no debug: drifted\n  expected: gone\n    actual: here\n",
+        ),
+    ] {
+        let (_dir, marker, code) = no_fixture(status);
+
+        cmd()
+            .args(["check", "-e", &code])
+            .assert()
+            .success()
+            .stdout(stdout);
+        assert!(!marker.exists());
+    }
+}
+
+#[test]
+fn apply_removes_a_present_no_assertion() {
+    let (_dir, marker, code) = no_fixture(":present");
+
+    cmd()
+        .args(["apply", "-e", &code])
+        .assert()
+        .success()
+        .stdout("no debug: present\n  removed\n");
+    assert!(marker.exists());
+}
+
+#[test]
+fn apply_removes_a_drifted_no_assertion_without_prompting() {
+    let (_dir, marker, code) = no_fixture(NO_DRIFTED);
+
+    cmd()
+        .args(["apply", "-e", &code])
+        .assert()
+        .success()
+        .stdout("no debug: drifted\n  expected: gone\n    actual: here\n  removed\n");
+    assert!(marker.exists());
+}
+
+#[test]
+fn apply_leaves_an_absent_no_assertion_alone() {
+    let (_dir, marker, code) = no_fixture(":absent");
+
+    cmd()
+        .args(["apply", "-e", &code])
+        .assert()
+        .success()
+        .stdout("no debug\n");
+    assert!(!marker.exists());
+}
+
+#[test]
+fn apply_runs_no_from_a_script() {
+    let (dir, marker, code) = no_fixture(":present");
+    let script = dir.path().join("frork.fnl");
+    fs_err::write(
+        &script,
+        format!("(local {{: no}} (require :frork))\n{code}\n"),
+    )
+    .unwrap();
+
+    cmd()
+        .args(["apply", &script.display().to_string()])
+        .assert()
+        .success();
+    assert!(marker.exists());
+}

@@ -28,6 +28,7 @@ use frork_lib::error::FrorkError;
 use frork_lib::registry::Providers;
 use frork_lib::report;
 use frork_lib::runtime;
+use frork_lib::runtime::Declaration;
 use frork_lib::utils::ExpandedPath;
 use frork_lib::utils::Utils;
 use fs_err as fs;
@@ -112,7 +113,7 @@ type Recorded = Rc<RefCell<Vec<String>>>;
 fn recorder() -> (Recorded, impl runtime::StatusHandler) {
     let seen: Recorded = Rc::new(RefCell::new(Vec::new()));
     let sink = seen.clone();
-    let handler = move |status: &Status, assertion: &dyn Assertion| {
+    let handler = move |_: Declaration, status: &Status, assertion: &dyn Assertion| {
         sink.borrow_mut().push(format!("{status:?}: {assertion}"));
         Ok(())
     };
@@ -371,22 +372,38 @@ fn lua_utils_agree_with_their_rust_functions(tc: TestCase) {
 // --- report::render ---
 
 #[hegel::test]
-fn render_repeats_the_declaration_and_suffixes_absence(tc: TestCase) {
+fn render_is_bare_when_the_declaration_holds(tc: TestCase) {
     let display = tc.draw(text());
     let assertion = Named(display.clone());
 
     assert_eq!(
-        report::render(&Status::Present, &assertion),
+        report::render(Declaration::Ok, &Status::Present, &assertion),
         [format!("ok {display}")]
     );
     assert_eq!(
-        report::render(&Status::Absent, &assertion),
+        report::render(Declaration::No, &Status::Absent, &assertion),
+        [format!("no {display}")]
+    );
+}
+
+#[hegel::test]
+fn render_names_the_status_when_the_declaration_fails(tc: TestCase) {
+    let display = tc.draw(text());
+    let assertion = Named(display.clone());
+
+    assert_eq!(
+        report::render(Declaration::Ok, &Status::Absent, &assertion),
         [format!("ok {display}: absent")]
+    );
+    assert_eq!(
+        report::render(Declaration::No, &Status::Present, &assertion),
+        [format!("no {display}: present")]
     );
 }
 
 #[hegel::test]
 fn render_shows_both_sides_of_a_drift_verbatim(tc: TestCase) {
+    let declaration = tc.draw(gs::sampled_from(vec![Declaration::Ok, Declaration::No]));
     let display = tc.draw(text());
     let expected = tc.draw(text());
     let actual = tc.draw(text());
@@ -396,9 +413,9 @@ fn render_shows_both_sides_of_a_drift_verbatim(tc: TestCase) {
     });
 
     assert_eq!(
-        report::render(&status, &Named(display.clone())),
+        report::render(declaration, &status, &Named(display.clone())),
         [
-            format!("ok {display}: drifted"),
+            format!("{declaration} {display}: drifted"),
             format!("  expected: {expected}"),
             format!("    actual: {actual}"),
         ]

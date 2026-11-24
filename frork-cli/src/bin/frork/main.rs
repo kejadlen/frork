@@ -6,6 +6,8 @@ use clap_complete::Shell;
 use frork_lib::assertions::Assertion;
 use frork_lib::assertions::Status;
 use frork_lib::report;
+use frork_lib::report::Action;
+use frork_lib::runtime::Declaration;
 use frork_lib::runtime::StatusHandler;
 use frork_lib::runtime::run_code;
 use frork_lib::runtime::run_script;
@@ -33,7 +35,7 @@ struct Cli {
 enum Commands {
     /// Report the status of each assertion.
     Check(Source),
-    /// Create or update whatever doesn't match its assertion.
+    /// Create, update, or remove whatever doesn't match its assertion.
     Apply(Source),
 }
 
@@ -94,27 +96,30 @@ fn run(command: &Commands) -> Result<()> {
     }
 }
 
-fn check(status: &Status, assertion: &dyn Assertion) -> Result<()> {
-    print_lines(&report::render(status, assertion));
+fn check(declaration: Declaration, status: &Status, assertion: &dyn Assertion) -> Result<()> {
+    print_lines(&report::render(declaration, status, assertion));
     Ok(())
 }
 
-fn apply(status: &Status, assertion: &dyn Assertion) -> Result<()> {
-    match status {
-        Status::Present => print_lines(&report::render(status, assertion)),
-        Status::Absent => {
-            print_lines(&report::render(status, assertion));
+fn apply(declaration: Declaration, status: &Status, assertion: &dyn Assertion) -> Result<()> {
+    print_lines(&report::render(declaration, status, assertion));
+    match report::action(declaration, status) {
+        Action::Nothing => {}
+        Action::Create => {
             assertion.create()?;
             println!("{}", report::CREATED);
         }
-        Status::Drifted(_) => {
-            print_lines(&report::render(status, assertion));
+        Action::PromptUpdate => {
             if report::wants_update(&prompt(report::UPDATE_PROMPT)?) {
                 assertion.update()?;
                 println!("{}", report::UPDATED);
             } else {
                 println!("{}", report::KEPT);
             }
+        }
+        Action::Remove => {
+            assertion.remove()?;
+            println!("{}", report::REMOVED);
         }
     }
     Ok(())
