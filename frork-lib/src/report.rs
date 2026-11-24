@@ -1,17 +1,17 @@
-use crate::assertions::AssertionType;
+use crate::assertions::Provider;
 use crate::assertions::Status;
 
 /// Renders an assertion's status as the lines the CLI prints. Kept apart from
 /// the printing itself so the wording is testable.
-pub fn render(status: &Status, assertion: &dyn AssertionType) -> Vec<String> {
+pub fn render(status: &Status, assertion: &dyn Provider) -> Vec<String> {
     match status {
-        Status::Ok => vec![format!("ok: {assertion}")],
-        Status::Missing => vec![format!("missing: {assertion}")],
+        Status::Present => vec![format!("ok: {assertion}")],
+        Status::Absent => vec![format!("missing: {assertion}")],
         // TODO: show a nicer diff?
-        Status::ConflictUpgrade(conflict) => vec![
+        Status::Drifted(drift) => vec![
             format!("conflict (upgradable): {assertion}"),
-            format!("  expected: {}", conflict.expected),
-            format!("    actual: {}", conflict.actual),
+            format!("  expected: {}", drift.expected),
+            format!("    actual: {}", drift.actual),
         ],
     }
 }

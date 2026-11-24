@@ -2,23 +2,23 @@
 # Add entries as false positives are discovered.
 
 exclude_re = [
-    # Unimplemented upgrade stubs — nothing calls them in tests, so replacing
+    # Unimplemented update stubs — nothing calls them in tests, so replacing
     # the todo!() with Ok(()) cannot be observed. Drop an entry when that
-    # type's upgrade is implemented, at the same point its cov-excl markers
+    # provider's update is implemented, at the same point its cov-excl markers
     # in assertions.rs go. remove still defaults on the trait.
-    "impl AssertionType for Symlink>::upgrade",
-    "impl AssertionType for Directory>::upgrade",
-    "impl AssertionType for Git>::upgrade",
-    "impl AssertionType for Brew<R>>::upgrade",
-    "impl AssertionType for BrewBundle<R>>::upgrade",
-    "impl AssertionType for Debug>::upgrade",
-    "AssertionType::remove",
+    "impl Provider for Symlink>::update",
+    "impl Provider for Directory>::update",
+    "impl Provider for Git>::update",
+    "impl Provider for Brew<R>>::update",
+    "impl Provider for BrewBundle<R>>::update",
+    "impl Provider for Debug>::update",
+    "Provider::remove",
 
-    # BrewBundle's status and install exist twice, split on
+    # BrewBundle's status and create exist twice, split on
     # #[cfg(target_os = "macos")]. cargo-mutants cannot tell which half is
     # compiled, so it always reports the inactive one as missed.
-    "impl AssertionType for BrewBundle<R>>::status",
-    "impl AssertionType for BrewBundle<R>>::install",
+    "impl Provider for BrewBundle<R>>::status",
+    "impl Provider for BrewBundle<R>>::create",
 ]
 
 # main.rs is I/O only — argument parsing, println!, and the stdin prompt.

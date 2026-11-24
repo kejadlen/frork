@@ -6,18 +6,18 @@ use miette::miette;
 use mlua::prelude::*;
 use tracing::info;
 
-use crate::assertions::AssertionType;
-use crate::assertions::LuaAssertionType;
+use crate::assertions::LuaProvider;
+use crate::assertions::Provider;
 use crate::assertions::Status;
 use crate::error::FrorkError;
-use crate::registry::Registry;
+use crate::registry::Providers;
 use crate::utils::Utils;
 
 /// Handles each assertion's status once it has been evaluated. The binary
 /// supplies the rendering and any prompting; nothing here writes to stdout.
-pub trait StatusHandler: Fn(&Status, &dyn AssertionType) -> Result<()> + Clone + 'static {}
+pub trait StatusHandler: Fn(&Status, &dyn Provider) -> Result<()> + Clone + 'static {}
 
-impl<T> StatusHandler for T where T: Fn(&Status, &dyn AssertionType) -> Result<()> + Clone + 'static {}
+impl<T> StatusHandler for T where T: Fn(&Status, &dyn Provider) -> Result<()> + Clone + 'static {}
 
 /// Evaluates inline Fennel code.
 pub fn run_code(code: &str, handle_status: impl StatusHandler) -> Result<()> {
@@ -121,27 +121,25 @@ fn setup_lua(handle_status: impl StatusHandler) -> Result<(Lua, LuaTable, LuaTab
 }
 
 struct Frork<F> {
-    // RefCell needed for interior mutability — register() adds new assertion
+    // RefCell needed for interior mutability — provide() adds new
     // types at runtime when called from Lua/Fennel code.
-    registry: RefCell<Registry>,
+    providers: RefCell<Providers>,
     handle_status: F,
 }
 
 impl<F> Frork<F> {
     fn new(handle_status: F) -> Self {
         Self {
-            registry: RefCell::new(Registry::default()),
+            providers: RefCell::new(Providers::default()),
             handle_status,
         }
     }
 }
 
 impl<F: StatusHandler> Frork<F> {
-    fn register(&self, name: &str, lua_assertion_type: LuaAssertionType) -> LuaResult<()> {
-        self.registry
-            .borrow_mut()
-            .register(name, lua_assertion_type);
-        info!("Registered assertion type: {}", name);
+    fn provide(&self, name: &str, lua_provider: LuaProvider) -> LuaResult<()> {
+        self.providers.borrow_mut().provide(name, lua_provider);
+        info!("Added provider: {}", name);
         Ok(())
     }
 
@@ -152,14 +150,13 @@ impl<F: StatusHandler> Frork<F> {
 
         let mut args_iter = args.into_iter();
         let name = args_iter.next().and_then(|v| v.to_string().ok());
-        let assertion_type =
-            name.ok_or_else(|| LuaError::external(FrorkError::MissingAssertionType))?;
+        let provider = name.ok_or_else(|| LuaError::external(FrorkError::MissingProvider))?;
 
         let assertion_args: LuaMultiValue = args_iter.collect();
 
-        let factory = self.registry.borrow().get_factory(&assertion_type);
+        let factory = self.providers.borrow().get_factory(&provider);
         let factory = factory.map_err(LuaError::external)?;
-        let assertion = factory.create(lua, assertion_args);
+        let assertion = factory.build(lua, assertion_args);
         let assertion = assertion.map_err(LuaError::external)?;
         let status = assertion.status().map_err(LuaError::external)?;
 
@@ -176,11 +173,11 @@ impl<F: StatusHandler> IntoLua for Frork<F> {
         let frork_clone = frork.clone();
         // The &Lua annotation is required: without it the closure infers a
         // single concrete lifetime and no longer satisfies create_function.
-        let register = move |_lua: &Lua, (name, assertion_type): (String, LuaAssertionType)| {
-            frork_clone.register(&name, assertion_type)
+        let provide = move |_lua: &Lua, (name, provider): (String, LuaProvider)| {
+            frork_clone.provide(&name, provider)
         };
-        let register_fn = lua.create_function(register)?;
-        frork_table.set("register", register_fn)?;
+        let provide_fn = lua.create_function(provide)?;
+        frork_table.set("provide", provide_fn)?;
 
         let frork_clone = frork.clone();
         let ok_fn =
@@ -206,7 +203,7 @@ mod tests {
     fn recorder() -> (Recorded, impl StatusHandler) {
         let seen: Recorded = Rc::new(RefCell::new(Vec::new()));
         let sink = seen.clone();
-        let handler = move |status: &Status, assertion: &dyn AssertionType| {
+        let handler = move |status: &Status, assertion: &dyn Provider| {
             sink.borrow_mut().push(format!("{status:?}: {assertion}"));
             Ok(())
         };
@@ -219,7 +216,7 @@ mod tests {
 
         run_code(r#"(ok :directory "/tmp")"#, handler).unwrap();
 
-        assert_eq!(seen.borrow().as_slice(), ["Ok: directory /tmp"]);
+        assert_eq!(seen.borrow().as_slice(), ["Present: directory /tmp"]);
     }
 
     #[test]
@@ -236,28 +233,28 @@ mod tests {
         assert_eq!(
             seen.borrow().as_slice(),
             [
-                "Ok: directory /tmp",
-                "Missing: directory /frork-does-not-exist",
+                "Present: directory /tmp",
+                "Absent: directory /frork-does-not-exist",
             ]
         );
     }
 
     #[test]
-    fn test_register_adds_a_type_usable_from_fennel() {
+    fn test_provide_adds_a_type_usable_from_fennel() {
         let (seen, handler) = recorder();
 
         run_code(
             r#"(local frork (require :frork))
-               (frork.register :always-missing
-                 {:status (fn [] "missing")
-                  :install (fn [] nil)
+               (frork.provide :always-absent
+                 {:status (fn [] "absent")
+                  :create (fn [] nil)
                   :display (fn [a] (.. "custom " a))})
-               (ok :always-missing "thing")"#,
+               (ok :always-absent "thing")"#,
             handler,
         )
         .unwrap();
 
-        assert_eq!(seen.borrow().as_slice(), ["Missing: custom thing"]);
+        assert_eq!(seen.borrow().as_slice(), ["Absent: custom thing"]);
     }
 
     #[test]
@@ -278,8 +275,7 @@ mod tests {
 
     #[test]
     fn test_run_code_propagates_handler_failures() {
-        let handler =
-            |_status: &Status, _assertion: &dyn AssertionType| Err(miette!("handler said no"));
+        let handler = |_status: &Status, _assertion: &dyn Provider| Err(miette!("handler said no"));
 
         assert!(run_code(r#"(ok :directory "/tmp")"#, handler).is_err());
     }
@@ -302,7 +298,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(seen.borrow().as_slice(), ["Ok: directory /tmp"]);
+        assert_eq!(seen.borrow().as_slice(), ["Present: directory /tmp"]);
     }
 
     #[test]
@@ -314,7 +310,7 @@ mod tests {
         lua.globals().set("frork", frork).unwrap();
         lua.load(r#"frork.ok("directory", "/tmp")"#).exec().unwrap();
 
-        assert_eq!(seen.borrow().as_slice(), ["Ok: directory /tmp"]);
+        assert_eq!(seen.borrow().as_slice(), ["Present: directory /tmp"]);
     }
 
     #[test]
@@ -326,9 +322,9 @@ mod tests {
         let frork = frork_module(&lua, handler).unwrap();
         lua.globals().set("frork", frork).unwrap();
         lua.load(
-            r#"frork.register("custom", {
-                 status = function() return "ok" end,
-                 install = function() end,
+            r#"frork.provide("custom", {
+                 status = function() return "present" end,
+                 create = function() end,
                })
                frork.ok("custom")"#,
         )
@@ -355,7 +351,7 @@ mod tests {
         let (seen, handler) = recorder();
         run_script(script.to_str().unwrap(), handler).unwrap();
 
-        assert_eq!(seen.borrow().as_slice(), ["Ok: directory /tmp"]);
+        assert_eq!(seen.borrow().as_slice(), ["Present: directory /tmp"]);
     }
 
     #[test]

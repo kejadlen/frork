@@ -16,16 +16,16 @@ use std::env;
 use std::path::Path;
 use std::rc::Rc;
 
-use frork_lib::assertions::AssertionType;
-use frork_lib::assertions::Conflict;
 use frork_lib::assertions::Directory;
+use frork_lib::assertions::Drift;
 use frork_lib::assertions::Git;
 use frork_lib::assertions::LuaAssertion;
-use frork_lib::assertions::LuaAssertionType;
+use frork_lib::assertions::LuaProvider;
+use frork_lib::assertions::Provider;
 use frork_lib::assertions::Status;
 use frork_lib::assertions::Symlink;
 use frork_lib::error::FrorkError;
-use frork_lib::registry::Registry;
+use frork_lib::registry::Providers;
 use frork_lib::report;
 use frork_lib::runtime;
 use frork_lib::utils::ExpandedPath;
@@ -37,7 +37,7 @@ use hegel::generators::{self as gs, Generator};
 use mlua::prelude::*;
 use tempfile::TempDir;
 
-const BUILT_IN_TYPES: [&str; 6] = [
+const BUILT_IN_PROVIDERS: [&str; 6] = [
     "brew",
     "brew-bundle",
     "debug",
@@ -95,12 +95,12 @@ fn lua_strings(lua: &Lua, values: &[String]) -> LuaMultiValue {
     )
 }
 
-fn lua_type(lua: &Lua, code: &str) -> LuaAssertionType {
+fn lua_type(lua: &Lua, code: &str) -> LuaProvider {
     let value = lua.load(code).eval::<LuaValue>().unwrap();
-    LuaAssertionType::from_lua(value, lua).unwrap()
+    LuaProvider::from_lua(value, lua).unwrap()
 }
 
-fn conflict_table(lua: &Lua, expected: &str, actual: &str) -> LuaValue {
+fn drift_table(lua: &Lua, expected: &str, actual: &str) -> LuaValue {
     let table = lua.create_table().unwrap();
     table.set("expected", expected).unwrap();
     table.set("actual", actual).unwrap();
@@ -112,7 +112,7 @@ type Recorded = Rc<RefCell<Vec<String>>>;
 fn recorder() -> (Recorded, impl runtime::StatusHandler) {
     let seen: Recorded = Rc::new(RefCell::new(Vec::new()));
     let sink = seen.clone();
-    let handler = move |status: &Status, assertion: &dyn AssertionType| {
+    let handler = move |status: &Status, assertion: &dyn Provider| {
         sink.borrow_mut().push(format!("{status:?}: {assertion}"));
         Ok(())
     };
@@ -128,16 +128,16 @@ impl std::fmt::Display for Named {
     }
 }
 
-impl AssertionType for Named {
+impl Provider for Named {
     fn status(&self) -> miette::Result<Status> {
-        Ok(Status::Ok)
+        Ok(Status::Present)
     }
 
-    fn install(&self) -> miette::Result<()> {
+    fn create(&self) -> miette::Result<()> {
         Ok(())
     }
 
-    fn upgrade(&self) -> miette::Result<()> {
+    fn update(&self) -> miette::Result<()> {
         Ok(())
     }
 }
@@ -189,7 +189,7 @@ fn chomp_removes_exactly_the_trailing_newlines(tc: TestCase) {
     assert_eq!(Utils::chomp(&format!("{body}{newlines}")), body);
 }
 
-// --- upgrade prompt ---
+// --- update prompt ---
 
 #[hegel::test]
 fn wants_upgrade_accepts_only_y_or_yes(tc: TestCase) {
@@ -371,26 +371,26 @@ fn lua_utils_agree_with_their_rust_functions(tc: TestCase) {
 // --- report::render ---
 
 #[hegel::test]
-fn render_prefixes_ok_and_missing_with_their_status(tc: TestCase) {
+fn render_prefixes_present_and_absent_with_their_status(tc: TestCase) {
     let display = tc.draw(text());
     let assertion = Named(display.clone());
 
     assert_eq!(
-        report::render(&Status::Ok, &assertion),
+        report::render(&Status::Present, &assertion),
         [format!("ok: {display}")]
     );
     assert_eq!(
-        report::render(&Status::Missing, &assertion),
+        report::render(&Status::Absent, &assertion),
         [format!("missing: {display}")]
     );
 }
 
 #[hegel::test]
-fn render_shows_both_sides_of_a_conflict_verbatim(tc: TestCase) {
+fn render_shows_both_sides_of_a_drift_verbatim(tc: TestCase) {
     let display = tc.draw(text());
     let expected = tc.draw(text());
     let actual = tc.draw(text());
-    let status = Status::ConflictUpgrade(Conflict {
+    let status = Status::Drifted(Drift {
         expected: expected.clone(),
         actual: actual.clone(),
     });
@@ -408,37 +408,37 @@ fn render_shows_both_sides_of_a_conflict_verbatim(tc: TestCase) {
 // --- Status from Lua ---
 
 #[hegel::test]
-fn status_rejects_any_string_but_ok_or_missing(tc: TestCase) {
-    let s = tc.draw(text().filter(|s: &String| s != "ok" && s != "missing"));
+fn status_rejects_any_string_but_present_or_absent(tc: TestCase) {
+    let s = tc.draw(text().filter(|s: &String| s != "present" && s != "absent"));
     let lua = Lua::new();
     assert!(Status::from_lua_multi(lua_strings(&lua, &[s]), &lua).is_err());
 }
 
 #[hegel::test]
-fn status_keeps_both_sides_of_a_conflict(tc: TestCase) {
+fn status_keeps_both_sides_of_a_drift(tc: TestCase) {
     let expected = tc.draw(text());
     let actual = tc.draw(text());
     let lua = Lua::new();
     let values = LuaMultiValue::from_vec(vec![
-        LuaValue::String(lua.create_string("conflict-upgrade").unwrap()),
-        conflict_table(&lua, &expected, &actual),
+        LuaValue::String(lua.create_string("drifted").unwrap()),
+        drift_table(&lua, &expected, &actual),
     ]);
 
     match Status::from_lua_multi(values, &lua).unwrap() {
-        Status::ConflictUpgrade(conflict) => {
-            assert_eq!((conflict.expected, conflict.actual), (expected, actual));
+        Status::Drifted(drift) => {
+            assert_eq!((drift.expected, drift.actual), (expected, actual));
         }
-        other => panic!("expected a conflict, got {other:?}"),
+        other => panic!("expected drift, got {other:?}"),
     }
 }
 
 #[hegel::test]
-fn status_rejects_a_conflict_under_any_other_name(tc: TestCase) {
-    let s = tc.draw(text().filter(|s: &String| s != "conflict-upgrade"));
+fn status_rejects_a_drift_under_any_other_name(tc: TestCase) {
+    let s = tc.draw(text().filter(|s: &String| s != "drifted"));
     let lua = Lua::new();
     let values = LuaMultiValue::from_vec(vec![
         LuaValue::String(lua.create_string(&s).unwrap()),
-        conflict_table(&lua, "expected", "actual"),
+        drift_table(&lua, "expected", "actual"),
     ]);
 
     assert!(Status::from_lua_multi(values, &lua).is_err());
@@ -447,7 +447,7 @@ fn status_rejects_a_conflict_under_any_other_name(tc: TestCase) {
 // --- LuaAssertion ---
 
 const NO_DISPLAY: &str =
-    r#"return {status = function() return "ok" end, install = function() end}"#;
+    r#"return {status = function() return "present" end, create = function() end}"#;
 
 #[hegel::test]
 fn lua_assertion_displays_its_name_and_args_by_default(tc: TestCase) {
@@ -475,7 +475,7 @@ fn lua_assertion_falls_back_to_the_default_display_when_display_fails(tc: TestCa
     let broken = lua_type(
         &lua,
         &format!(
-            r#"return {{status = function() return "ok" end, install = function() end, display = {broken_display}}}"#
+            r#"return {{status = function() return "present" end, create = function() end, display = {broken_display}}}"#
         ),
     );
 
@@ -493,20 +493,20 @@ fn lua_assertion_hands_every_hook_its_args_verbatim(tc: TestCase) {
         r#"seen = {}
            return {
              display = function(...) seen.display = table.pack(...); return "" end,
-             status = function(...) seen.status = table.pack(...); return "ok" end,
-             install = function(...) seen.install = table.pack(...) end,
-             upgrade = function(...) seen.upgrade = table.pack(...) end,
+             status = function(...) seen.status = table.pack(...); return "present" end,
+             create = function(...) seen.create = table.pack(...) end,
+             update = function(...) seen.update = table.pack(...) end,
            }"#,
     );
     let assertion = LuaAssertion::new("recording", lua_strings(&lua, &args), recording);
 
     let _ = assertion.to_string();
     assertion.status().unwrap();
-    assertion.install().unwrap();
-    assertion.upgrade().unwrap();
+    assertion.create().unwrap();
+    assertion.update().unwrap();
 
     let seen: LuaTable = lua.globals().get("seen").unwrap();
-    for hook in ["display", "status", "install", "upgrade"] {
+    for hook in ["display", "status", "create", "update"] {
         let packed: LuaTable = seen.get(hook).unwrap();
         let n: usize = packed.get("n").unwrap();
         let received: Vec<String> = (1..=n).map(|i| packed.get(i).unwrap()).collect();
@@ -514,40 +514,40 @@ fn lua_assertion_hands_every_hook_its_args_verbatim(tc: TestCase) {
     }
 }
 
-// --- Registry ---
+// --- Providers ---
 
 #[hegel::test]
-fn registry_rejects_any_name_it_does_not_know(tc: TestCase) {
-    let name = tc.draw(text().filter(|n: &String| !BUILT_IN_TYPES.contains(&n.as_str())));
-    let Err(error) = Registry::default().get_factory(&name) else {
+fn providers_reject_any_name_they_do_not_know(tc: TestCase) {
+    let name = tc.draw(text().filter(|n: &String| !BUILT_IN_PROVIDERS.contains(&n.as_str())));
+    let Err(error) = Providers::default().get_factory(&name) else {
         panic!("{name:?} resolved to a factory");
     };
-    assert_eq!(error.to_string(), format!("Unknown assertion type: {name}"));
+    assert_eq!(error.to_string(), format!("unknown provider :{name}"));
 }
 
 #[hegel::test]
-fn registry_prefers_a_registered_type_under_any_name(tc: TestCase) {
+fn providers_prefer_a_provided_type_under_any_name(tc: TestCase) {
     let name = if tc.draw(gs::booleans()) {
-        tc.draw(gs::sampled_from(BUILT_IN_TYPES.to_vec()))
+        tc.draw(gs::sampled_from(BUILT_IN_PROVIDERS.to_vec()))
             .to_string()
     } else {
         tc.draw(text())
     };
     let lua = Lua::new();
-    let mut registry = Registry::default();
-    registry.register(
+    let mut providers = Providers::default();
+    providers.provide(
         &name,
         lua_type(
             &lua,
-            r#"return {display = function() return "registered" end,
-                       status = function() return "ok" end,
-                       install = function() end}"#,
+            r#"return {display = function() return "provided" end,
+                       status = function() return "present" end,
+                       create = function() end}"#,
         ),
     );
 
-    let factory = registry.get_factory(&name).unwrap();
-    let assertion = factory.create(&lua, LuaMultiValue::new()).unwrap();
-    assert_eq!(assertion.to_string(), "registered");
+    let factory = providers.get_factory(&name).unwrap();
+    let assertion = factory.build(&lua, LuaMultiValue::new()).unwrap();
+    assert_eq!(assertion.to_string(), "provided");
 }
 
 // --- FrorkError ---
@@ -556,11 +556,9 @@ fn frork_error(tc: &TestCase) -> FrorkError {
     let detail = tc.draw(text());
     match tc.draw(gs::integers::<u8>().max_value(4)) {
         0 => FrorkError::NoOperation,
-        1 => FrorkError::UnknownAssertionType {
-            assertion_type: detail,
-        },
+        1 => FrorkError::UnknownProvider { name: detail },
         2 => FrorkError::InvalidArguments(detail),
-        3 => FrorkError::MissingAssertionType,
+        3 => FrorkError::MissingProvider,
         _ => FrorkError::Lua(detail),
     }
 }
@@ -593,20 +591,20 @@ fn frork_error_survives_a_lua_caller(tc: TestCase) {
 // --- Filesystem assertions ---
 
 #[hegel::test]
-fn directory_install_satisfies_any_nested_path(tc: TestCase) {
+fn directory_create_satisfies_any_nested_path(tc: TestCase) {
     let parts = tc.draw(gs::vecs(path_component()).min_size(1).max_size(4));
     let root = TempDir::new().unwrap();
     let directory = Directory {
         path: expanded(&root.path().join(parts.join("/"))),
     };
 
-    assert!(matches!(directory.status().unwrap(), Status::Missing));
-    directory.install().unwrap();
-    assert!(matches!(directory.status().unwrap(), Status::Ok));
+    assert!(matches!(directory.status().unwrap(), Status::Absent));
+    directory.create().unwrap();
+    assert!(matches!(directory.status().unwrap(), Status::Present));
 }
 
 #[hegel::test]
-fn symlink_install_satisfies_status_whether_or_not_the_source_exists(tc: TestCase) {
+fn symlink_create_satisfies_status_whether_or_not_the_source_exists(tc: TestCase) {
     let root = TempDir::new().unwrap();
     let sources = root.path().join("sources");
     fs::create_dir(&sources).unwrap();
@@ -619,9 +617,9 @@ fn symlink_install_satisfies_status_whether_or_not_the_source_exists(tc: TestCas
         source: expanded(&source),
     };
 
-    assert!(matches!(symlink.status().unwrap(), Status::Missing));
-    symlink.install().unwrap();
-    assert!(matches!(symlink.status().unwrap(), Status::Ok));
+    assert!(matches!(symlink.status().unwrap(), Status::Absent));
+    symlink.create().unwrap();
+    assert!(matches!(symlink.status().unwrap(), Status::Present));
 }
 
 /// A remote URL git will store and hand back unchanged: no control
@@ -653,11 +651,11 @@ fn git_status_is_ok_for_the_configured_remote(tc: TestCase) {
         remote_url: url,
     };
 
-    assert!(matches!(git.status().unwrap(), Status::Ok));
+    assert!(matches!(git.status().unwrap(), Status::Present));
 }
 
 #[hegel::test(test_cases = 25)]
-fn git_status_reports_any_other_remote_as_a_conflict(tc: TestCase) {
+fn git_status_reports_any_other_remote_as_drift(tc: TestCase) {
     let configured = tc.draw(remote_url());
     let wanted = tc.draw(remote_url());
     tc.assume(configured != wanted);
@@ -668,11 +666,11 @@ fn git_status_reports_any_other_remote_as_a_conflict(tc: TestCase) {
     };
 
     match git.status().unwrap() {
-        Status::ConflictUpgrade(conflict) => assert_eq!(
-            (conflict.expected, conflict.actual),
+        Status::Drifted(drift) => assert_eq!(
+            (drift.expected, drift.actual),
             (wanted, format!("current remote: {configured}"))
         ),
-        other => panic!("expected a conflict, got {other:?}"),
+        other => panic!("expected drift, got {other:?}"),
     }
 }
 
@@ -695,7 +693,7 @@ fn run_script_runs_a_script_at_any_path(tc: TestCase) {
 
     let (seen, handler) = recorder();
     runtime::run_script(script.to_str().unwrap(), handler).unwrap();
-    assert_eq!(seen.borrow().as_slice(), ["Ok: directory /tmp"]);
+    assert_eq!(seen.borrow().as_slice(), ["Present: directory /tmp"]);
 }
 
 // `;` separates search-path entries and `?` is the module placeholder, and
@@ -723,5 +721,5 @@ fn run_script_requires_modules_beside_the_script(tc: TestCase) {
 
     let (seen, handler) = recorder();
     runtime::run_script(script.to_str().unwrap(), handler).unwrap();
-    assert_eq!(seen.borrow().as_slice(), ["Ok: directory /tmp"]);
+    assert_eq!(seen.borrow().as_slice(), ["Present: directory /tmp"]);
 }

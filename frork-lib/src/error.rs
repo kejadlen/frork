@@ -6,12 +6,12 @@ use thiserror::Error;
 pub enum FrorkError {
     #[error("No operation specified")]
     NoOperation,
-    #[error("Unknown assertion type: {assertion_type}")]
-    UnknownAssertionType { assertion_type: String },
+    #[error("unknown provider :{name}")]
+    UnknownProvider { name: String },
     #[error("Invalid arguments: {0}")]
     InvalidArguments(String),
-    #[error("Missing assertion type")]
-    MissingAssertionType,
+    #[error("Missing provider")]
+    MissingProvider,
     #[error("Lua error: {0}")]
     Lua(String),
 }

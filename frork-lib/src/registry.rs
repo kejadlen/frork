@@ -3,49 +3,48 @@ use std::collections::HashMap;
 use miette::Result;
 use mlua::prelude::*;
 
-use crate::assertions::AssertionType;
-use crate::assertions::AssertionTypeFactory;
 use crate::assertions::Brew;
 use crate::assertions::BrewBundle;
 use crate::assertions::Debug;
 use crate::assertions::Directory;
 use crate::assertions::Git;
 use crate::assertions::LuaAssertion;
-use crate::assertions::LuaAssertionType;
+use crate::assertions::LuaProvider;
+use crate::assertions::Provider;
+use crate::assertions::ProviderFactory;
 use crate::assertions::Symlink;
 use crate::assertions::TypedFactory;
 use crate::error::FrorkError;
 
-/// Dispatches an assertion type name to the factory that builds it. Types
-/// registered from Fennel shadow the built-ins.
+/// Dispatches a provider name to the factory that builds its assertions.
+/// Providers defined in Fennel shadow the built-ins.
 #[derive(Default)]
-pub struct Registry {
-    lua_assertion_types: HashMap<String, LuaAssertionType>,
+pub struct Providers {
+    lua_providers: HashMap<String, LuaProvider>,
 }
 
-impl Registry {
-    pub fn register(&mut self, name: &str, lua_assertion_type: LuaAssertionType) {
-        self.lua_assertion_types
-            .insert(name.to_string(), lua_assertion_type);
+impl Providers {
+    pub fn provide(&mut self, name: &str, lua_provider: LuaProvider) {
+        self.lua_providers.insert(name.to_string(), lua_provider);
     }
 
-    pub fn get_factory(&self, assertion_type: &str) -> Result<Box<dyn AssertionTypeFactory>> {
-        if let Some(lua_assertion) = self.lua_assertion_types.get(assertion_type) {
+    pub fn get_factory(&self, name: &str) -> Result<Box<dyn ProviderFactory>> {
+        if let Some(lua_provider) = self.lua_providers.get(name) {
             return Ok(Box::new(LuaAssertionFactory {
-                assertion_type: assertion_type.to_string(),
-                lua_assertion_type: lua_assertion.clone(),
+                name: name.to_string(),
+                lua_provider: lua_provider.clone(),
             }));
         }
 
-        match assertion_type {
+        match name {
             "brew" => Ok(Box::new(TypedFactory::<Brew>::new())),
             "brew-bundle" => Ok(Box::new(TypedFactory::<BrewBundle>::new())),
             "debug" => Ok(Box::new(TypedFactory::<Debug>::new())),
             "directory" => Ok(Box::new(TypedFactory::<Directory>::new())),
             "git" => Ok(Box::new(TypedFactory::<Git>::new())),
             "symlink" => Ok(Box::new(TypedFactory::<Symlink>::new())),
-            _ => Err(FrorkError::UnknownAssertionType {
-                assertion_type: assertion_type.to_string(),
+            _ => Err(FrorkError::UnknownProvider {
+                name: name.to_string(),
             }
             .into()),
         }
@@ -53,16 +52,16 @@ impl Registry {
 }
 
 struct LuaAssertionFactory {
-    assertion_type: String,
-    lua_assertion_type: LuaAssertionType,
+    name: String,
+    lua_provider: LuaProvider,
 }
 
-impl AssertionTypeFactory for LuaAssertionFactory {
-    fn create(&self, _lua: &Lua, args: LuaMultiValue) -> Result<Box<dyn AssertionType>> {
+impl ProviderFactory for LuaAssertionFactory {
+    fn build(&self, _lua: &Lua, args: LuaMultiValue) -> Result<Box<dyn Provider>> {
         Ok(Box::new(LuaAssertion::new(
-            &self.assertion_type,
+            &self.name,
             args,
-            self.lua_assertion_type.clone(),
+            self.lua_provider.clone(),
         )))
     }
 }
@@ -71,12 +70,12 @@ impl AssertionTypeFactory for LuaAssertionFactory {
 mod tests {
     use super::*;
 
-    fn lua_assertion_type(lua: &Lua) -> LuaAssertionType {
+    fn lua_provider(lua: &Lua) -> LuaProvider {
         let value = lua
-            .load(r#"return {status = function() return "ok" end, install = function() end}"#)
+            .load(r#"return {status = function() return "present" end, create = function() end}"#)
             .eval::<LuaValue>()
             .unwrap();
-        LuaAssertionType::from_lua(value, lua).unwrap()
+        LuaProvider::from_lua(value, lua).unwrap()
     }
 
     /// Every built-in name resolves to a factory that builds a working
@@ -84,7 +83,7 @@ mod tests {
     #[test]
     fn test_built_in_types_resolve() {
         let lua = Lua::new();
-        let registry = Registry::default();
+        let providers = Providers::default();
 
         let cases = [
             ("brew", LuaMultiValue::new(), "brew"),
@@ -116,51 +115,48 @@ mod tests {
         ];
 
         for (name, args, expected) in cases {
-            let factory = registry.get_factory(name);
+            let factory = providers.get_factory(name);
             let factory = factory.unwrap_or_else(|e| panic!("{name} did not resolve: {e}"));
-            let assertion = factory.create(&lua, args);
+            let assertion = factory.build(&lua, args);
             let assertion = assertion.unwrap_or_else(|e| panic!("{name} failed to build: {e}"));
             assert_eq!(assertion.to_string(), expected, "for type {name}");
         }
     }
 
     #[test]
-    fn test_registered_types_are_dispatched() {
+    fn test_provided_types_are_dispatched() {
         let lua = Lua::new();
-        let mut registry = Registry::default();
-        registry.register("custom", lua_assertion_type(&lua));
+        let mut providers = Providers::default();
+        providers.provide("custom", lua_provider(&lua));
 
-        let factory = registry.get_factory("custom").unwrap();
+        let factory = providers.get_factory("custom").unwrap();
         let assertion = factory
-            .create(&lua, lua.load(r#"return "arg""#).eval().unwrap())
+            .build(&lua, lua.load(r#"return "arg""#).eval().unwrap())
             .unwrap();
 
         assert_eq!(assertion.to_string(), "custom arg");
     }
 
     #[test]
-    fn test_re_registering_replaces_the_previous_type() {
+    fn test_re_providing_replaces_the_previous_type() {
         let lua = Lua::new();
-        let mut registry = Registry::default();
+        let mut providers = Providers::default();
 
-        registry.register("custom", lua_assertion_type(&lua));
+        providers.provide("custom", lua_provider(&lua));
         let replacement = lua
             .load(
                 r#"return {
                     display = function() return "replaced" end,
-                    status = function() return "ok" end,
-                    install = function() end,
+                    status = function() return "present" end,
+                    create = function() end,
                 }"#,
             )
             .eval::<LuaValue>()
             .unwrap();
-        registry.register(
-            "custom",
-            LuaAssertionType::from_lua(replacement, &lua).unwrap(),
-        );
+        providers.provide("custom", LuaProvider::from_lua(replacement, &lua).unwrap());
 
-        let factory = registry.get_factory("custom").unwrap();
-        let assertion = factory.create(&lua, LuaMultiValue::new()).unwrap();
+        let factory = providers.get_factory("custom").unwrap();
+        let assertion = factory.build(&lua, LuaMultiValue::new()).unwrap();
         assert_eq!(assertion.to_string(), "replaced");
     }
 }

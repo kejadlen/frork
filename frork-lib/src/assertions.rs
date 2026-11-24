@@ -15,12 +15,12 @@ use crate::error::FrorkError;
 use crate::utils::ExpandedPath;
 use crate::utils::Utils;
 
-pub trait AssertionType: std::fmt::Display {
+pub trait Provider: std::fmt::Display {
     fn status(&self) -> Result<Status>;
-    fn install(&self) -> Result<()>;
-    fn upgrade(&self) -> Result<()>;
+    fn create(&self) -> Result<()>;
+    fn update(&self) -> Result<()>;
 
-    // Not yet called — will be used when `frork remove` is implemented.
+    // Not yet called — will be used once removal can be declared.
     // cov-excl-start
     #[allow(dead_code)]
     fn remove(&self) -> Result<()> {
@@ -31,24 +31,21 @@ pub trait AssertionType: std::fmt::Display {
 
 #[derive(Debug)]
 pub enum Status {
-    Ok,
-    Missing,
-    ConflictUpgrade(Conflict),
+    Present,
+    Absent,
+    Drifted(Drift),
 }
 
 impl FromLuaMulti for Status {
     fn from_lua_multi(values: LuaMultiValue, lua: &Lua) -> LuaResult<Self> {
-        if let Ok((status_str, conflict)) =
-            <(String, Conflict)>::from_lua_multi(values.clone(), lua)
-        {
+        if let Ok((status_str, drift)) = <(String, Drift)>::from_lua_multi(values.clone(), lua) {
             return match status_str.as_str() {
-                "conflict-upgrade" => Ok(Status::ConflictUpgrade(conflict)),
+                "drifted" => Ok(Status::Drifted(drift)),
                 _ => Err(LuaError::FromLuaConversionError {
                     from: "multivalue",
                     to: "Status".to_string(),
                     message: Some(
-                        "String + conflict combination only supported for conflict-upgrade"
-                            .to_string(),
+                        "String + drift combination only supported for drifted".to_string(),
                     ),
                 }),
             };
@@ -56,8 +53,8 @@ impl FromLuaMulti for Status {
 
         if let Ok(status_str) = String::from_lua_multi(values, lua) {
             return match status_str.as_str() {
-                "ok" => Ok(Status::Ok),
-                "missing" => Ok(Status::Missing),
+                "present" => Ok(Status::Present),
+                "absent" => Ok(Status::Absent),
                 _ => Err(LuaError::FromLuaConversionError {
                     from: "string",
                     to: "Status".to_string(),
@@ -69,25 +66,25 @@ impl FromLuaMulti for Status {
         Err(LuaError::FromLuaConversionError {
             from: "multivalue",
             to: "Status".to_string(),
-            message: Some("Expected single string or conflict-upgrade with table".to_string()),
+            message: Some("Expected single string or drifted with table".to_string()),
         })
     }
 }
 
 #[derive(Debug, Deserialize)]
-pub struct Conflict {
+pub struct Drift {
     pub expected: String,
     pub actual: String,
 }
 
-impl FromLua for Conflict {
+impl FromLua for Drift {
     fn from_lua(value: LuaValue, lua: &Lua) -> LuaResult<Self> {
         lua.from_value(value)
     }
 }
 
-pub trait AssertionTypeFactory {
-    fn create(&self, lua: &Lua, args: LuaMultiValue) -> Result<Box<dyn AssertionType>>;
+pub trait ProviderFactory {
+    fn build(&self, lua: &Lua, args: LuaMultiValue) -> Result<Box<dyn Provider>>;
 }
 
 pub struct TypedFactory<T>(std::marker::PhantomData<T>);
@@ -104,18 +101,18 @@ impl<T> Default for TypedFactory<T> {
     }
 }
 
-impl<T> AssertionTypeFactory for TypedFactory<T>
+impl<T> ProviderFactory for TypedFactory<T>
 where
-    T: AssertionType + FromLuaMulti + 'static,
+    T: Provider + FromLuaMulti + 'static,
 {
-    fn create(&self, lua: &Lua, args: LuaMultiValue) -> Result<Box<dyn AssertionType>> {
+    fn build(&self, lua: &Lua, args: LuaMultiValue) -> Result<Box<dyn Provider>> {
         T::from_lua_multi(args, lua)
-            .map(|t| Box::new(t) as Box<dyn AssertionType>)
-            .map_err(|e| miette!("Failed to create assertion type: {e}"))
+            .map(|t| Box::new(t) as Box<dyn Provider>)
+            .map_err(|e| miette!("Failed to create assertion: {e}"))
     }
 }
 
-// --- Built-in assertion types ---
+// --- Built-in providers ---
 
 pub struct Symlink {
     pub target: ExpandedPath,
@@ -144,32 +141,32 @@ impl std::fmt::Display for Symlink {
     }
 }
 
-impl AssertionType for Symlink {
+impl Provider for Symlink {
     fn status(&self) -> Result<Status> {
         // Unlike `Path::exists`, this doesn't follow the link, so a link to a
         // source that doesn't exist yet still counts as present.
         if fs::symlink_metadata(&self.target).is_err() {
-            return Ok(Status::Missing);
+            return Ok(Status::Absent);
         }
 
         if let Ok(link_target) = fs::read_link(&self.target) {
             if link_target == Path::new(&self.source) {
-                Ok(Status::Ok)
+                Ok(Status::Present)
             } else {
-                Ok(Status::ConflictUpgrade(Conflict {
+                Ok(Status::Drifted(Drift {
                     expected: self.source.to_string(),
                     actual: format!("points to {}", link_target.display()),
                 }))
             }
         } else {
-            Ok(Status::ConflictUpgrade(Conflict {
+            Ok(Status::Drifted(Drift {
                 expected: format!("symlink to {}", self.source),
                 actual: "not a symlink".to_string(),
             }))
         }
     }
 
-    fn install(&self) -> Result<()> {
+    fn create(&self) -> Result<()> {
         use std::os::unix::fs;
         // Scripts may create the source after the link, so a dangling link
         // is allowed, but it's more often a typo than intended.
@@ -183,7 +180,7 @@ impl AssertionType for Symlink {
     }
 
     // cov-excl-start
-    fn upgrade(&self) -> Result<()> {
+    fn update(&self) -> Result<()> {
         todo!()
     }
     // cov-excl-stop
@@ -206,32 +203,32 @@ impl std::fmt::Display for Directory {
     }
 }
 
-impl AssertionType for Directory {
+impl Provider for Directory {
     fn status(&self) -> Result<Status> {
         let path = Path::new(&self.path);
         if path.is_dir() {
-            return Ok(Status::Ok);
+            return Ok(Status::Present);
         }
 
         // Unlike `Path::exists`, this doesn't follow the link, so a dangling
         // link reads as something in the way rather than nothing there.
         let Ok(metadata) = fs::symlink_metadata(path) else {
-            return Ok(Status::Missing);
+            return Ok(Status::Absent);
         };
-        Ok(Status::ConflictUpgrade(Conflict {
+        Ok(Status::Drifted(Drift {
             expected: "directory".to_string(),
             actual: file_kind(metadata.file_type()).to_string(),
         }))
     }
 
-    fn install(&self) -> Result<()> {
+    fn create(&self) -> Result<()> {
         fs::create_dir_all(&self.path).into_diagnostic()?;
         debug!("created: {}", self);
         Ok(())
     }
 
     // cov-excl-start
-    fn upgrade(&self) -> Result<()> {
+    fn update(&self) -> Result<()> {
         todo!()
     }
     // cov-excl-stop
@@ -274,18 +271,18 @@ impl std::fmt::Display for Git {
     }
 }
 
-impl AssertionType for Git {
+impl Provider for Git {
     fn status(&self) -> Result<Status> {
         Utils::assert_bin("git")?;
 
         let dir_path = Path::new(&self.dir);
 
         if !dir_path.exists() {
-            return Ok(Status::Missing);
+            return Ok(Status::Absent);
         }
 
         if !dir_path.is_dir() {
-            return Ok(Status::ConflictUpgrade(Conflict {
+            return Ok(Status::Drifted(Drift {
                 expected: "directory".to_string(),
                 actual: "file".to_string(),
             }));
@@ -295,7 +292,7 @@ impl AssertionType for Git {
         // not-yet-cloned.
         let mut entries = fs::read_dir(dir_path).into_diagnostic()?;
         if entries.next().is_none() {
-            return Ok(Status::Missing);
+            return Ok(Status::Absent);
         }
 
         let config_args = [
@@ -308,7 +305,7 @@ impl AssertionType for Git {
         let (remote_output, exit_code) = Utils::sh("git", &config_args)?;
 
         if exit_code != 0 {
-            return Ok(Status::ConflictUpgrade(Conflict {
+            return Ok(Status::Drifted(Drift {
                 expected: format!("git repo with remote {}", self.remote_url),
                 actual: "failed to get remote url".to_string(),
             }));
@@ -316,16 +313,16 @@ impl AssertionType for Git {
 
         let current_remote = Utils::chomp(&remote_output);
         if current_remote == self.remote_url {
-            Ok(Status::Ok)
+            Ok(Status::Present)
         } else {
-            Ok(Status::ConflictUpgrade(Conflict {
+            Ok(Status::Drifted(Drift {
                 expected: self.remote_url.clone(),
                 actual: format!("current remote: {}", current_remote),
             }))
         }
     }
 
-    fn install(&self) -> Result<()> {
+    fn create(&self) -> Result<()> {
         Utils::assert_bin("git")?;
 
         let (_output, exit_code) = Utils::sh("git", &["clone", &self.remote_url, &self.dir])?;
@@ -339,13 +336,13 @@ impl AssertionType for Git {
     }
 
     // cov-excl-start
-    fn upgrade(&self) -> Result<()> {
+    fn update(&self) -> Result<()> {
         todo!()
     }
     // cov-excl-stop
 }
 
-/// A seam over shelling out, so assertion types can be exercised without
+/// A seam over shelling out, so providers can be exercised without
 /// running the real command. Production code always uses [`SystemRunner`];
 /// only tests substitute anything else.
 pub trait CommandRunner {
@@ -408,22 +405,22 @@ impl<R> std::fmt::Display for Brew<R> {
     }
 }
 
-impl<R: CommandRunner> AssertionType for Brew<R> {
+impl<R: CommandRunner> Provider for Brew<R> {
     fn status(&self) -> Result<Status> {
         if !self.runner.has_bin("brew") {
-            return Ok(Status::Missing);
+            return Ok(Status::Absent);
         }
 
         let (_output, exit_code) = self.runner.run("brew", &["--version"])?;
         if exit_code == 0 {
-            Ok(Status::Ok)
+            Ok(Status::Present)
         } else {
-            Ok(Status::Missing)
+            Ok(Status::Absent)
         }
     }
 
     // This needs sudo — figure out how to make this work through frork.
-    fn install(&self) -> Result<()> {
+    fn create(&self) -> Result<()> {
         let install_args = [
             "-c",
             r#"/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)""#,
@@ -434,12 +431,12 @@ impl<R: CommandRunner> AssertionType for Brew<R> {
             return Err(miette!("Failed to install Homebrew: {}", output));
         }
 
-        debug!("installed: {}", self);
+        debug!("created: {}", self);
         Ok(())
     }
 
     // cov-excl-start
-    fn upgrade(&self) -> Result<()> {
+    fn update(&self) -> Result<()> {
         todo!()
     }
     // cov-excl-stop
@@ -468,7 +465,7 @@ impl<R> std::fmt::Display for BrewBundle<R> {
     }
 }
 
-impl<R: CommandRunner> AssertionType for BrewBundle<R> {
+impl<R: CommandRunner> Provider for BrewBundle<R> {
     #[cfg(not(target_os = "macos"))]
     fn status(&self) -> Result<Status> {
         Err(miette!("brew-bundle only supported on Darwin/macOS"))
@@ -487,7 +484,7 @@ impl<R: CommandRunner> AssertionType for BrewBundle<R> {
                 .run_with_envs("brew", &strict_args, &no_auto_update)?;
 
         if exit_code != 0 {
-            return Ok(Status::Missing);
+            return Ok(Status::Absent);
         }
 
         let check_args = ["bundle", "check", file_arg.as_str()];
@@ -496,22 +493,22 @@ impl<R: CommandRunner> AssertionType for BrewBundle<R> {
                 .run_with_envs("brew", &check_args, &no_auto_update)?;
 
         if exit_code != 0 {
-            return Ok(Status::ConflictUpgrade(Conflict {
+            return Ok(Status::Drifted(Drift {
                 expected: "up-to-date packages".to_string(),
                 actual: "packages need upgrade".to_string(),
             }));
         }
 
-        Ok(Status::Ok)
+        Ok(Status::Present)
     }
 
     #[cfg(not(target_os = "macos"))]
-    fn install(&self) -> Result<()> {
+    fn create(&self) -> Result<()> {
         Err(miette!("brew-bundle only supported on Darwin/macOS"))
     }
 
     #[cfg(target_os = "macos")]
-    fn install(&self) -> Result<()> {
+    fn create(&self) -> Result<()> {
         self.runner.require_bin("brew")?;
 
         let file_arg = format!("--file={}", self.brewfile);
@@ -523,12 +520,12 @@ impl<R: CommandRunner> AssertionType for BrewBundle<R> {
             return Err(miette!("Failed to install brew bundle"));
         }
 
-        debug!("installed: {}", self);
+        debug!("created: {}", self);
         Ok(())
     }
 
     // cov-excl-start
-    fn upgrade(&self) -> Result<()> {
+    fn update(&self) -> Result<()> {
         todo!()
     }
     // cov-excl-stop
@@ -536,17 +533,17 @@ impl<R: CommandRunner> AssertionType for BrewBundle<R> {
 
 pub struct Debug {
     pub status_fn: Option<LuaFunction>,
-    pub install_fn: Option<LuaFunction>,
+    pub create_fn: Option<LuaFunction>,
 }
 
 impl FromLuaMulti for Debug {
     fn from_lua_multi(args: LuaMultiValue, lua: &Lua) -> LuaResult<Self> {
         let table = LuaTable::from_lua_multi(args, lua)?;
         let status_fn: Option<LuaFunction> = table.get("status")?;
-        let install_fn: Option<LuaFunction> = table.get("install")?;
+        let create_fn: Option<LuaFunction> = table.get("create")?;
         Ok(Self {
             status_fn,
-            install_fn,
+            create_fn,
         })
     }
 }
@@ -557,7 +554,7 @@ impl std::fmt::Display for Debug {
     }
 }
 
-impl AssertionType for Debug {
+impl Provider for Debug {
     fn status(&self) -> Result<Status> {
         if let Some(ref status_fn) = self.status_fn {
             let result = status_fn
@@ -565,53 +562,53 @@ impl AssertionType for Debug {
                 .map_err(|e| miette!("Debug status function failed: {e}"))?;
             Ok(result)
         } else {
-            Ok(Status::Ok)
+            Ok(Status::Present)
         }
     }
 
-    fn install(&self) -> Result<()> {
-        info!("debug: installing");
-        let install_fn = self
-            .install_fn
+    fn create(&self) -> Result<()> {
+        info!("debug: creating");
+        let create_fn = self
+            .create_fn
             .as_ref()
-            .ok_or_else(|| miette!("Install not implemented for debug assertion"))?;
-        install_fn
+            .ok_or_else(|| miette!("Create not implemented for debug assertion"))?;
+        create_fn
             .call::<()>(LuaMultiValue::new())
-            .map_err(|e| miette!("Debug install function failed: {e}"))?;
+            .map_err(|e| miette!("Debug create function failed: {e}"))?;
         Ok(())
     }
 
     // cov-excl-start
-    fn upgrade(&self) -> Result<()> {
+    fn update(&self) -> Result<()> {
         todo!()
     }
     // cov-excl-stop
 }
 
-// --- Lua custom assertion types ---
+// --- Providers defined in Lua ---
 
 #[derive(Clone)]
-pub struct LuaAssertionType {
+pub struct LuaProvider {
     pub display_fn: Option<LuaFunction>,
     pub status_fn: LuaFunction,
-    pub install_fn: LuaFunction,
-    pub upgrade_fn: Option<LuaFunction>,
+    pub create_fn: LuaFunction,
+    pub update_fn: Option<LuaFunction>,
 }
 
-impl FromLua for LuaAssertionType {
+impl FromLua for LuaProvider {
     fn from_lua(value: LuaValue, lua: &Lua) -> LuaResult<Self> {
         let table = LuaTable::from_lua(value, lua)?;
 
         let display_fn: Option<LuaFunction> = table.get("display")?;
         let status_fn: LuaFunction = table.get("status")?;
-        let install_fn: LuaFunction = table.get("install")?;
-        let upgrade_fn: Option<LuaFunction> = table.get("upgrade")?;
+        let create_fn: LuaFunction = table.get("create")?;
+        let update_fn: Option<LuaFunction> = table.get("update")?;
 
         Ok(Self {
             display_fn,
             status_fn,
-            install_fn,
-            upgrade_fn,
+            create_fn,
+            update_fn,
         })
     }
 }
@@ -619,15 +616,15 @@ impl FromLua for LuaAssertionType {
 pub struct LuaAssertion {
     pub name: String,
     pub args: LuaMultiValue,
-    pub assertion_type: LuaAssertionType,
+    pub provider: LuaProvider,
 }
 
 impl LuaAssertion {
-    pub fn new(name: &str, args: LuaMultiValue, assertion_type: LuaAssertionType) -> Self {
+    pub fn new(name: &str, args: LuaMultiValue, provider: LuaProvider) -> Self {
         Self {
             name: name.to_string(),
             args,
-            assertion_type,
+            provider,
         }
     }
 }
@@ -645,7 +642,7 @@ impl std::fmt::Display for LuaAssertion {
                 .join(" ")
         };
 
-        if let Some(ref display_fn) = self.assertion_type.display_fn {
+        if let Some(ref display_fn) = self.provider.display_fn {
             let result = display_fn
                 .call::<String>(self.args.clone())
                 .unwrap_or_else(|err| {
@@ -659,36 +656,36 @@ impl std::fmt::Display for LuaAssertion {
     }
 }
 
-impl AssertionType for LuaAssertion {
+impl Provider for LuaAssertion {
     fn status(&self) -> Result<Status> {
         let result = self
-            .assertion_type
+            .provider
             .status_fn
             .call::<Status>(self.args.clone())
             .map_err(FrorkError::from)?;
         Ok(result)
     }
 
-    fn install(&self) -> Result<()> {
-        self.assertion_type
-            .install_fn
+    fn create(&self) -> Result<()> {
+        self.provider
+            .create_fn
             .call::<()>(self.args.clone())
             .map_err(FrorkError::from)?;
-        debug!("installed: {}", self);
+        debug!("created: {}", self);
         Ok(())
     }
 
-    fn upgrade(&self) -> Result<()> {
-        // A missing upgrade function falls back to install — re-running the
-        // install is the default way to bring a conflicted assertion in line.
-        if let Some(upgrade_fn) = self.assertion_type.upgrade_fn.as_ref() {
-            upgrade_fn
+    fn update(&self) -> Result<()> {
+        // A missing update function falls back to create — re-running the
+        // create is the default way to bring a drifted assertion in line.
+        if let Some(update_fn) = self.provider.update_fn.as_ref() {
+            update_fn
                 .call::<()>(self.args.clone())
                 .map_err(FrorkError::from)?;
         } else {
-            self.install()?;
+            self.create()?;
         }
-        debug!("upgraded: {}", self);
+        debug!("updated: {}", self);
         Ok(())
     }
 }
@@ -708,7 +705,7 @@ mod tests {
         path.to_str().unwrap().parse().unwrap()
     }
 
-    // --- Status / Conflict ---
+    // --- Status / Drift ---
 
     fn status_from(lua: &Lua, script: &str) -> LuaResult<Status> {
         Status::from_lua_multi(multi(lua, script), lua)
@@ -719,12 +716,12 @@ mod tests {
         let lua = Lua::new();
 
         assert!(matches!(
-            status_from(&lua, r#"return "ok""#),
-            Ok(Status::Ok)
+            status_from(&lua, r#"return "present""#),
+            Ok(Status::Present)
         ));
         assert!(matches!(
-            status_from(&lua, r#"return "missing""#),
-            Ok(Status::Missing)
+            status_from(&lua, r#"return "absent""#),
+            Ok(Status::Absent)
         ));
 
         let err = status_from(&lua, r#"return "bogus""#).unwrap_err();
@@ -738,7 +735,7 @@ mod tests {
         let err = status_from(&lua, r#"return true"#).unwrap_err();
         assert!(
             err.to_string()
-                .contains("Expected single string or conflict-upgrade with table")
+                .contains("Expected single string or drifted with table")
         );
     }
 
@@ -750,7 +747,7 @@ mod tests {
         let factory: TypedFactory<Directory> = TypedFactory::default();
 
         let assertion = factory
-            .create(&lua, multi(&lua, r#"return "/tmp""#))
+            .build(&lua, multi(&lua, r#"return "/tmp""#))
             .unwrap();
         assert_eq!(assertion.to_string(), "directory /tmp");
     }
@@ -760,26 +757,22 @@ mod tests {
         let lua = Lua::new();
         let factory: TypedFactory<Directory> = TypedFactory::new();
 
-        // Box<dyn AssertionType> is not Debug, so unwrap_err is unavailable.
-        let Err(error) = factory.create(&lua, multi(&lua, r#"return true"#)) else {
+        // Box<dyn Provider> is not Debug, so unwrap_err is unavailable.
+        let Err(error) = factory.build(&lua, multi(&lua, r#"return true"#)) else {
             panic!("expected a conversion failure"); // cov-excl-line
         };
-        assert!(
-            error
-                .to_string()
-                .contains("Failed to create assertion type")
-        );
+        assert!(error.to_string().contains("Failed to create assertion"));
     }
 
     // --- Symlink ---
 
     #[test]
-    fn test_symlink_status_conflicts() {
+    fn test_symlink_status_drifts() {
         let dir = TempDir::new().unwrap();
         let source = dir.path().join("source");
         fs::write(&source, "").unwrap();
 
-        // A link pointing somewhere else conflicts.
+        // A link pointing somewhere else drifts.
         let other = dir.path().join("other");
         fs::write(&other, "").unwrap();
         let target = dir.path().join("link");
@@ -788,31 +781,28 @@ mod tests {
             target: expanded(&target),
             source: expanded(&source),
         };
-        let Status::ConflictUpgrade(conflict) = symlink.status().unwrap() else {
-            panic!("expected a conflict for a wrong-target link"); // cov-excl-line
+        let Status::Drifted(drift) = symlink.status().unwrap() else {
+            panic!("expected drift for a wrong-target link"); // cov-excl-line
         };
-        assert_eq!(conflict.expected, source.display().to_string());
-        assert_eq!(conflict.actual, format!("points to {}", other.display()));
+        assert_eq!(drift.expected, source.display().to_string());
+        assert_eq!(drift.actual, format!("points to {}", other.display()));
 
-        // A non-symlink where the link goes conflicts too.
+        // A non-symlink where the link goes drifts too.
         let file = dir.path().join("file-target");
         fs::write(&file, "").unwrap();
         let symlink = Symlink {
             target: expanded(&file),
             source: expanded(&source),
         };
-        let Status::ConflictUpgrade(conflict) = symlink.status().unwrap() else {
-            panic!("expected a conflict for a non-symlink target"); // cov-excl-line
+        let Status::Drifted(drift) = symlink.status().unwrap() else {
+            panic!("expected drift for a non-symlink target"); // cov-excl-line
         };
-        assert_eq!(
-            conflict.expected,
-            format!("symlink to {}", source.display())
-        );
-        assert_eq!(conflict.actual, "not a symlink");
+        assert_eq!(drift.expected, format!("symlink to {}", source.display()));
+        assert_eq!(drift.actual, "not a symlink");
     }
 
     #[test]
-    fn test_symlink_install_failure() {
+    fn test_symlink_create_failure() {
         let dir = TempDir::new().unwrap();
         let source = dir.path().join("source.txt");
         fs::write(&source, "").unwrap();
@@ -821,7 +811,7 @@ mod tests {
             source: expanded(&source),
         };
 
-        let error = symlink.install().unwrap_err();
+        let error = symlink.create().unwrap_err();
         assert!(error.to_string().contains("Failed to create symlink"));
     }
 
@@ -841,21 +831,21 @@ mod tests {
     }
 
     #[test]
-    fn test_symlink_install_warns_about_a_missing_source() {
+    fn test_symlink_create_warns_about_a_missing_source() {
         let dir = TempDir::new().unwrap();
         let symlink = Symlink {
             target: expanded(&dir.path().join("link")),
             source: expanded(&dir.path().join("never-created")),
         };
 
-        let warnings = warnings_from(|| symlink.install().unwrap());
+        let warnings = warnings_from(|| symlink.create().unwrap());
 
         assert!(warnings.contains("source does not exist"), "{warnings}");
-        assert!(matches!(symlink.status().unwrap(), Status::Ok));
+        assert!(matches!(symlink.status().unwrap(), Status::Present));
     }
 
     #[test]
-    fn test_symlink_install_resolves_a_relative_source_beside_the_link() {
+    fn test_symlink_create_resolves_a_relative_source_beside_the_link() {
         let dir = TempDir::new().unwrap();
         let links = dir.path().join("links");
         fs::create_dir(&links).unwrap();
@@ -872,8 +862,8 @@ mod tests {
             source: "absent".parse().unwrap(),
         };
 
-        assert_eq!(warnings_from(|| present.install().unwrap()), "");
-        assert!(warnings_from(|| absent.install().unwrap()).contains("source does not exist"));
+        assert_eq!(warnings_from(|| present.create().unwrap()), "");
+        assert!(warnings_from(|| absent.create().unwrap()).contains("source does not exist"));
     }
 
     #[test]
@@ -889,15 +879,15 @@ mod tests {
 
     // --- Directory ---
 
-    fn directory_conflict(path: &Path) -> Conflict {
+    fn directory_drift(path: &Path) -> Drift {
         let directory = Directory {
             path: expanded(path),
         };
-        let Status::ConflictUpgrade(conflict) = directory.status().unwrap() else {
-            panic!("expected a conflict for {path:?}"); // cov-excl-line
+        let Status::Drifted(drift) = directory.status().unwrap() else {
+            panic!("expected drift for {path:?}"); // cov-excl-line
         };
-        assert_eq!(conflict.expected, "directory");
-        conflict
+        assert_eq!(drift.expected, "directory");
+        drift
     }
 
     #[test]
@@ -917,12 +907,12 @@ mod tests {
         let socket = dir.path().join("socket");
         let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
 
-        assert_eq!(directory_conflict(&file).actual, "file");
-        assert_eq!(directory_conflict(&to_file).actual, "symlink");
-        assert_eq!(directory_conflict(&dangling).actual, "symlink");
-        assert_eq!(directory_conflict(&fifo).actual, "fifo");
-        assert_eq!(directory_conflict(&socket).actual, "socket");
-        assert_eq!(directory_conflict(Path::new("/dev/null")).actual, "device");
+        assert_eq!(directory_drift(&file).actual, "file");
+        assert_eq!(directory_drift(&to_file).actual, "symlink");
+        assert_eq!(directory_drift(&dangling).actual, "symlink");
+        assert_eq!(directory_drift(&fifo).actual, "fifo");
+        assert_eq!(directory_drift(&socket).actual, "socket");
+        assert_eq!(directory_drift(Path::new("/dev/null")).actual, "device");
     }
 
     #[test]
@@ -934,11 +924,11 @@ mod tests {
         let directory = Directory {
             path: expanded(&link),
         };
-        assert!(matches!(directory.status().unwrap(), Status::Ok));
+        assert!(matches!(directory.status().unwrap(), Status::Present));
     }
 
     #[test]
-    fn test_directory_install_failure() {
+    fn test_directory_create_failure() {
         let dir = TempDir::new().unwrap();
         let blocker = dir.path().join("blocker");
         fs::write(&blocker, "not a directory").unwrap();
@@ -946,7 +936,7 @@ mod tests {
         let directory = Directory {
             path: expanded(&blocker.join("child")),
         };
-        assert!(directory.install().is_err());
+        assert!(directory.create().is_err());
     }
 
     #[test]
@@ -981,14 +971,14 @@ mod tests {
             git.to_string(),
             format!("git {} {}", clone.display(), remote_url)
         );
-        assert!(matches!(git.status().unwrap(), Status::Missing));
+        assert!(matches!(git.status().unwrap(), Status::Absent));
 
-        git.install().unwrap();
-        assert!(matches!(git.status().unwrap(), Status::Ok));
+        git.create().unwrap();
+        assert!(matches!(git.status().unwrap(), Status::Present));
     }
 
     #[test]
-    fn test_git_status_conflicts() {
+    fn test_git_status_drifts() {
         let dir = TempDir::new().unwrap();
         let remote_url = bare_origin(dir.path());
 
@@ -999,20 +989,20 @@ mod tests {
             dir: expanded(&file),
             remote_url: remote_url.clone(),
         };
-        let Status::ConflictUpgrade(conflict) = git.status().unwrap() else {
-            panic!("expected a conflict for a non-directory path"); // cov-excl-line
+        let Status::Drifted(drift) = git.status().unwrap() else {
+            panic!("expected drift for a non-directory path"); // cov-excl-line
         };
-        assert_eq!(conflict.expected, "directory");
-        assert_eq!(conflict.actual, "file");
+        assert_eq!(drift.expected, "directory");
+        assert_eq!(drift.actual, "file");
 
-        // An empty directory counts as missing rather than conflicting.
+        // An empty directory counts as absent rather than drifted.
         let empty = dir.path().join("empty");
         fs::create_dir_all(&empty).unwrap();
         let git = Git {
             dir: expanded(&empty),
             remote_url: remote_url.clone(),
         };
-        assert!(matches!(git.status().unwrap(), Status::Missing));
+        assert!(matches!(git.status().unwrap(), Status::Absent));
 
         // A non-empty directory that is not a repo has no remote to read.
         let not_a_repo = dir.path().join("not-a-repo");
@@ -1022,21 +1012,21 @@ mod tests {
             dir: expanded(&not_a_repo),
             remote_url: remote_url.clone(),
         };
-        let Status::ConflictUpgrade(conflict) = git.status().unwrap() else {
-            panic!("expected a conflict when the remote cannot be read"); // cov-excl-line
+        let Status::Drifted(drift) = git.status().unwrap() else {
+            panic!("expected drift when the remote cannot be read"); // cov-excl-line
         };
-        assert_eq!(conflict.actual, "failed to get remote url");
+        assert_eq!(drift.actual, "failed to get remote url");
     }
 
     #[test]
-    fn test_git_install_failure() {
+    fn test_git_create_failure() {
         let dir = TempDir::new().unwrap();
         let git = Git {
             dir: expanded(&dir.path().join("clone")),
             remote_url: dir.path().join("does-not-exist.git").display().to_string(),
         };
 
-        let error = git.install().unwrap_err();
+        let error = git.create().unwrap_err();
         assert!(error.to_string().contains("Failed to clone git repository"));
     }
 
@@ -1149,7 +1139,7 @@ mod tests {
             runner: FakeRunner::without_bin("brew"),
         };
 
-        assert!(matches!(brew.status().unwrap(), Status::Missing));
+        assert!(matches!(brew.status().unwrap(), Status::Absent));
         assert!(brew.runner.calls().is_empty());
     }
 
@@ -1158,28 +1148,28 @@ mod tests {
         let brew = Brew {
             runner: FakeRunner::new(&[0]),
         };
-        assert!(matches!(brew.status().unwrap(), Status::Ok));
+        assert!(matches!(brew.status().unwrap(), Status::Present));
         assert_eq!(brew.runner.calls(), ["brew --version"]);
 
         // Present on PATH but not runnable.
         let brew = Brew {
             runner: FakeRunner::new(&[1]),
         };
-        assert!(matches!(brew.status().unwrap(), Status::Missing));
+        assert!(matches!(brew.status().unwrap(), Status::Absent));
     }
 
     #[test]
-    fn test_brew_install() {
+    fn test_brew_create() {
         let brew = Brew {
             runner: FakeRunner::new(&[0]),
         };
-        brew.install().unwrap();
+        brew.create().unwrap();
         assert!(brew.runner.calls()[0].contains("install.sh"));
 
         let brew = Brew {
             runner: FakeRunner::new(&[1]),
         };
-        let error = brew.install().unwrap_err();
+        let error = brew.create().unwrap_err();
         assert!(error.to_string().contains("Failed to install Homebrew"));
     }
 
@@ -1208,7 +1198,7 @@ mod tests {
         let bundle = brew_bundle(FakeRunner::default());
 
         assert!(bundle.status().is_err());
-        assert!(bundle.install().is_err());
+        assert!(bundle.create().is_err());
     }
 
     #[cfg(target_os = "macos")]
@@ -1217,26 +1207,26 @@ mod tests {
         let bundle = brew_bundle(FakeRunner::without_bin("brew"));
 
         assert!(bundle.status().unwrap_err().to_string().contains("brew"));
-        assert!(bundle.install().unwrap_err().to_string().contains("brew"));
+        assert!(bundle.create().unwrap_err().to_string().contains("brew"));
     }
 
     #[cfg(target_os = "macos")]
     #[test]
     fn test_brew_bundle_status_branches() {
-        // First check fails: packages are missing outright.
+        // First check fails: packages are absent outright.
         let bundle = brew_bundle(FakeRunner::new(&[1]));
-        assert!(matches!(bundle.status().unwrap(), Status::Missing));
+        assert!(matches!(bundle.status().unwrap(), Status::Absent));
 
         // First check passes, second fails: installed but out of date.
         let bundle = brew_bundle(FakeRunner::new(&[0, 1]));
-        let Status::ConflictUpgrade(conflict) = bundle.status().unwrap() else {
-            panic!("expected a conflict when packages need upgrading"); // cov-excl-line
+        let Status::Drifted(drift) = bundle.status().unwrap() else {
+            panic!("expected drift when packages are out of date"); // cov-excl-line
         };
-        assert_eq!(conflict.actual, "packages need upgrade");
+        assert_eq!(drift.actual, "packages need upgrade");
 
         // Both checks pass.
         let bundle = brew_bundle(FakeRunner::new(&[0, 0]));
-        assert!(matches!(bundle.status().unwrap(), Status::Ok));
+        assert!(matches!(bundle.status().unwrap(), Status::Present));
         assert_eq!(
             bundle.runner.calls(),
             [
@@ -1248,16 +1238,16 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn test_brew_bundle_install() {
+    fn test_brew_bundle_create() {
         let bundle = brew_bundle(FakeRunner::new(&[0]));
-        bundle.install().unwrap();
+        bundle.create().unwrap();
         assert_eq!(
             bundle.runner.calls(),
             ["brew bundle install --file=/tmp/Brewfile"]
         );
 
         let bundle = brew_bundle(FakeRunner::new(&[1]));
-        let error = bundle.install().unwrap_err();
+        let error = bundle.create().unwrap_err();
         assert!(error.to_string().contains("Failed to install brew bundle"));
     }
 
@@ -1267,17 +1257,17 @@ mod tests {
     fn test_debug_defaults_to_ok() {
         let debug = Debug {
             status_fn: None,
-            install_fn: None,
+            create_fn: None,
         };
 
         assert_eq!(debug.to_string(), "debug");
-        assert!(matches!(debug.status().unwrap(), Status::Ok));
+        assert!(matches!(debug.status().unwrap(), Status::Present));
 
-        let error = debug.install().unwrap_err();
+        let error = debug.create().unwrap_err();
         assert!(
             error
                 .to_string()
-                .contains("Install not implemented for debug assertion")
+                .contains("Create not implemented for debug assertion")
         );
     }
 
@@ -1287,14 +1277,14 @@ mod tests {
         let debug = Debug::from_lua_multi(
             multi(
                 &lua,
-                r#"return {status = function() return "missing" end, install = function() end}"#,
+                r#"return {status = function() return "absent" end, create = function() end}"#,
             ),
             &lua,
         )
         .unwrap();
 
-        assert!(matches!(debug.status().unwrap(), Status::Missing));
-        debug.install().unwrap();
+        assert!(matches!(debug.status().unwrap(), Status::Absent));
+        debug.create().unwrap();
     }
 
     #[test]
@@ -1305,7 +1295,7 @@ mod tests {
                 &lua,
                 r#"return {
                     status = function() error("status boom") end,
-                    install = function() error("install boom") end,
+                    create = function() error("create boom") end,
                 }"#,
             ),
             &lua,
@@ -1315,8 +1305,8 @@ mod tests {
         let error = debug.status().unwrap_err();
         assert!(error.to_string().contains("Debug status function failed"));
 
-        let error = debug.install().unwrap_err();
-        assert!(error.to_string().contains("Debug install function failed"));
+        let error = debug.create().unwrap_err();
+        assert!(error.to_string().contains("Debug create function failed"));
     }
 
     #[test]
@@ -1324,158 +1314,155 @@ mod tests {
         let lua = Lua::new();
 
         for script in [
-            r#"return {status = "missing"}"#,
-            r#"return {install = "nothing"}"#,
+            r#"return {status = "absent"}"#,
+            r#"return {create = "nothing"}"#,
         ] {
             assert!(Debug::from_lua_multi(multi(&lua, script), &lua).is_err());
         }
     }
 
-    // --- Lua assertion types ---
+    // --- Lua providers ---
 
-    fn lua_assertion_type(lua: &Lua, script: &str) -> LuaResult<LuaAssertionType> {
+    fn lua_provider(lua: &Lua, script: &str) -> LuaResult<LuaProvider> {
         let value = lua.load(script).eval::<LuaValue>().unwrap();
-        LuaAssertionType::from_lua(value, lua)
+        LuaProvider::from_lua(value, lua)
     }
 
     #[test]
-    fn test_lua_assertion_type_requires_status_and_install() {
+    fn test_lua_assertion_type_requires_status_and_create() {
         let lua = Lua::new();
 
-        let assertion_type = lua_assertion_type(
+        let provider = lua_provider(
             &lua,
-            r#"return {status = function() return "ok" end, install = function() end}"#,
+            r#"return {status = function() return "present" end, create = function() end}"#,
         )
         .unwrap();
-        assert!(assertion_type.display_fn.is_none());
-        assert!(assertion_type.upgrade_fn.is_none());
+        assert!(provider.display_fn.is_none());
+        assert!(provider.update_fn.is_none());
 
-        assert!(lua_assertion_type(&lua, r#"return {install = function() end}"#).is_err());
+        assert!(lua_provider(&lua, r#"return {create = function() end}"#).is_err());
     }
 
     #[test]
     fn test_lua_assertion_type_rejects_non_function_optional_fields() {
         let lua = Lua::new();
 
-        for field in ["display", "upgrade"] {
+        for field in ["display", "update"] {
             let script = format!(
-                r#"return {{status = function() return "ok" end, install = function() end, {field} = "oops"}}"#
+                r#"return {{status = function() return "present" end, create = function() end, {field} = "oops"}}"#
             );
-            assert!(lua_assertion_type(&lua, &script).is_err());
+            assert!(lua_provider(&lua, &script).is_err());
         }
     }
 
     #[test]
-    fn test_lua_assertion_runs_status_and_install() {
+    fn test_lua_assertion_runs_status_and_create() {
         let lua = Lua::new();
-        let assertion_type = lua_assertion_type(
+        let provider = lua_provider(
             &lua,
             r#"return {
-                status = function(a) if a == "yes" then return "ok" else return "missing" end end,
-                install = function() end,
+                status = function(a) if a == "yes" then return "present" else return "absent" end end,
+                create = function() end,
             }"#,
         )
         .unwrap();
 
-        let assertion = LuaAssertion::new(
-            "custom",
-            multi(&lua, r#"return "yes""#),
-            assertion_type.clone(),
-        );
-        assert!(matches!(assertion.status().unwrap(), Status::Ok));
-        assertion.install().unwrap();
+        let assertion =
+            LuaAssertion::new("custom", multi(&lua, r#"return "yes""#), provider.clone());
+        assert!(matches!(assertion.status().unwrap(), Status::Present));
+        assertion.create().unwrap();
 
-        let assertion = LuaAssertion::new("custom", multi(&lua, r#"return "no""#), assertion_type);
-        assert!(matches!(assertion.status().unwrap(), Status::Missing));
+        let assertion = LuaAssertion::new("custom", multi(&lua, r#"return "no""#), provider);
+        assert!(matches!(assertion.status().unwrap(), Status::Absent));
     }
 
     #[test]
     fn test_lua_assertion_propagates_failures() {
         let lua = Lua::new();
-        let assertion_type = lua_assertion_type(
+        let provider = lua_provider(
             &lua,
             r#"return {
                 status = function() error("status boom") end,
-                install = function() error("install boom") end,
+                create = function() error("create boom") end,
             }"#,
         )
         .unwrap();
 
-        let assertion = LuaAssertion::new("custom", LuaMultiValue::new(), assertion_type);
+        let assertion = LuaAssertion::new("custom", LuaMultiValue::new(), provider);
         assert!(assertion.status().is_err());
-        assert!(assertion.install().is_err());
+        assert!(assertion.create().is_err());
     }
 
     #[test]
-    fn test_lua_assertion_upgrade_fn_wins_over_install() {
+    fn test_lua_assertion_update_fn_wins_over_create() {
         let lua = Lua::new();
-        let assertion_type = lua_assertion_type(
+        let provider = lua_provider(
             &lua,
             r#"return {
-                status = function() return "ok" end,
-                install = function(a) _G.ran = "install:" .. a end,
-                upgrade = function(a) _G.ran = "upgrade:" .. a end,
+                status = function() return "present" end,
+                create = function(a) _G.ran = "create:" .. a end,
+                update = function(a) _G.ran = "update:" .. a end,
             }"#,
         )
         .unwrap();
 
-        let assertion = LuaAssertion::new("custom", multi(&lua, r#"return "arg""#), assertion_type);
-        assertion.upgrade().unwrap();
+        let assertion = LuaAssertion::new("custom", multi(&lua, r#"return "arg""#), provider);
+        assertion.update().unwrap();
 
         let ran: String = lua.globals().get("ran").unwrap();
-        assert_eq!(ran, "upgrade:arg");
+        assert_eq!(ran, "update:arg");
     }
 
     #[test]
-    fn test_lua_assertion_upgrade_falls_back_to_install() {
+    fn test_lua_assertion_update_falls_back_to_create() {
         let lua = Lua::new();
-        let assertion_type = lua_assertion_type(
+        let provider = lua_provider(
             &lua,
             r#"return {
-                status = function() return "ok" end,
-                install = function() _G.ran = "install" end,
+                status = function() return "present" end,
+                create = function() _G.ran = "create" end,
             }"#,
         )
         .unwrap();
 
-        let assertion = LuaAssertion::new("custom", LuaMultiValue::new(), assertion_type);
-        assertion.upgrade().unwrap();
+        let assertion = LuaAssertion::new("custom", LuaMultiValue::new(), provider);
+        assertion.update().unwrap();
 
         let ran: String = lua.globals().get("ran").unwrap();
-        assert_eq!(ran, "install");
+        assert_eq!(ran, "create");
     }
 
     #[test]
-    fn test_lua_assertion_upgrade_propagates_failures() {
+    fn test_lua_assertion_update_propagates_failures() {
         let lua = Lua::new();
-        let assertion_type = lua_assertion_type(
+        let provider = lua_provider(
             &lua,
             r#"return {
-                status = function() return "ok" end,
-                install = function() end,
-                upgrade = function() error("upgrade boom") end,
+                status = function() return "present" end,
+                create = function() end,
+                update = function() error("update boom") end,
             }"#,
         )
         .unwrap();
 
-        let assertion = LuaAssertion::new("custom", LuaMultiValue::new(), assertion_type);
-        assert!(assertion.upgrade().is_err());
+        let assertion = LuaAssertion::new("custom", LuaMultiValue::new(), provider);
+        assert!(assertion.update().is_err());
     }
 
     #[test]
     fn test_lua_assertion_display_fn_replaces_default() {
         let lua = Lua::new();
-        let assertion_type = lua_assertion_type(
+        let provider = lua_provider(
             &lua,
             r#"return {
                 display = function(a) return "rendered " .. a end,
-                status = function() return "ok" end,
-                install = function() end,
+                status = function() return "present" end,
+                create = function() end,
             }"#,
         )
         .unwrap();
 
-        let assertion = LuaAssertion::new("custom", multi(&lua, r#"return "arg""#), assertion_type);
+        let assertion = LuaAssertion::new("custom", multi(&lua, r#"return "arg""#), provider);
         assert_eq!(assertion.to_string(), "rendered arg");
     }
 }

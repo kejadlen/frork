@@ -2,7 +2,7 @@ use clap::CommandFactory;
 use clap::Parser;
 use clap::Subcommand;
 use clap_complete::Shell;
-use frork_lib::assertions::AssertionType;
+use frork_lib::assertions::Provider;
 use frork_lib::assertions::Status;
 use frork_lib::report;
 use frork_lib::runtime::run_code;
@@ -36,7 +36,7 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
-    // Assertion types panic through todo!() for cases that are not implemented
+    // Providers panic through todo!() for cases that are not implemented
     // yet; this renders those with the same formatting as recoverable errors.
     miette::set_panic_hook();
     // Warnings show without RUST_LOG, so they go to stderr to stay out of
@@ -73,23 +73,23 @@ fn run(command: &Commands) -> Result<()> {
     }
 }
 
-fn status(status: &Status, assertion: &dyn AssertionType) -> Result<()> {
+fn status(status: &Status, assertion: &dyn Provider) -> Result<()> {
     print_lines(&report::render(status, assertion));
     Ok(())
 }
 
-fn satisfy(status: &Status, assertion: &dyn AssertionType) -> Result<()> {
+fn satisfy(status: &Status, assertion: &dyn Provider) -> Result<()> {
     print_lines(&report::render(status, assertion));
 
     match status {
-        Status::Ok => {}
-        Status::Missing => {
-            assertion.install()?;
+        Status::Present => {}
+        Status::Absent => {
+            assertion.create()?;
             println!("ok: {assertion}");
         }
-        Status::ConflictUpgrade(_) => {
+        Status::Drifted(_) => {
             if report::wants_upgrade(&prompt("Upgrade? [y/N]: ")?) {
-                assertion.upgrade()?;
+                assertion.update()?;
                 println!("ok: {assertion}");
             } else {
                 println!("skipped: {assertion}");
