@@ -1,0 +1,36 @@
+--- frork-lib/src/runtime.rs
++++ replace run_code -> Result<(), FrorkError> with Ok(())
+@@ -61,32 +61,17 @@
+ }
+ 
+ /// The filename inline code compiles under, so its locations read as
+ /// `eval:3` instead of a quoted copy of the code.
+ const EVAL_FILENAME: &str = "eval";
+ 
+ /// Evaluates inline Fennel code.
+ pub fn run_code(code: &str, handle_status: impl StatusHandler) -> Result<(), FrorkError> {
+-    let (lua, frork_module, fennel_module) = setup_lua(handle_status)?;
+-
+-    let ok_fn: LuaFunction = bridge("get frork.ok", frork_module.get("ok"))?;
+-    bridge("set ok global", lua.globals().set("ok", ok_fn))?;
+-
+-    let no_fn: LuaFunction = bridge("get frork.no", frork_module.get("no"))?;
+-    bridge("set no global", lua.globals().set("no", no_fn))?;
+-
+-    let eval_fn: LuaFunction = bridge("get fennel.eval", fennel_module.get("eval"))?;
+-
+-    let options = bridge("build Fennel options", fennel_options(&lua))?;
+-    bridge("name inline code", options.set("filename", EVAL_FILENAME))?;
+-    let result = eval_fn.call::<()>((code, options));
+-    result.map_err(|source| FrorkError::ScriptEval(source.into()))?;
+-
+-    Ok(())
++    Ok(()) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Evaluates a `.fnl` script file, with its directory on the search path.
+ pub fn run_script(script: &str, handle_status: impl StatusHandler) -> Result<(), FrorkError> {
+     let (lua, _frork_module, fennel_module) = setup_lua(handle_status)?;
+ 
+     if let Some(script_dir_str) = script_dir(script) {
+         let package: LuaResult<LuaTable> = lua.globals().get("package");

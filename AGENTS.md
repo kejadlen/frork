@@ -77,7 +77,9 @@ just install                # cargo install --locked --path frork-cli
 - Rust edition 2024, resolver v3 workspace.
 - All domain logic lives in frork-lib; `main.rs` parses arguments and performs I/O, and depends on the library rather than re-declaring its modules. `bin/coverage` ignores it and `.cargo/mutants.toml` excludes it, so anything with a decision in it goes in a library module — `report.rs` holds the status wording, the choice of what `apply` does, and the update-prompt parsing for exactly that reason.
 - `just mutants` passes with zero survivors. Treat a new survivor as a missing assertion, not a reason to widen the exclusions.
-- Error handling: `miette` in the binary, `thiserror` in library code. Library errors derive `miette::Diagnostic`.
+- Error handling: `miette` in the binary, `thiserror` in library code. Library errors derive `miette::Diagnostic`, and library APIs, including `StatusHandler`, return `FrorkError` rather than `miette::Report`.
+  - Leaf variants say what went wrong. Context is added only by the context variants (`ScriptEval`/`ScriptRun`, `Declaration`, `AssertionBuild`, `ProviderHook`, `LuaBridge`). Each holds a `Cause` and uses `#[diagnostic(forward(source))]` so the innermost help renders at the top. Don't interpolate a `#[source]` into its own message: miette prints the chain, so the text shows up twice.
+  - Raise a `FrorkError` into Lua with `FrorkError::into_lua_error`, never bare `LuaError::external`. Lua then sees the whole chain and help as one message (`full_message`). Turn a `LuaError` back with `Cause::from`, which digs a `FrorkError` out from under any number of `CallbackError`/`WithContext` layers. `FrorkError::root` skips the context to the error that says what went wrong.
 - Logging uses `tracing` with `tracing-subscriber`. Use `tracing::info`, `tracing::debug`, etc. — not `println!` for diagnostic output.
 - Lua integration via `mlua` with Lua 5.4: vendored by frork-cli, the host's for frork-lua. The Fennel compiler is vendored as a Lua source file in frork-lib.
 - Filesystem operations use `fs-err` instead of `std::fs`. The `.clippy.toml` disallows bare `std::fs` types and methods so this is enforced at lint time.
@@ -147,7 +149,7 @@ The `Providers` struct in `registry.rs` dispatches provider names. It checks pro
 - `frork.provide(name, {status=fn, create=fn, update=fn, remove=fn})` — define a provider from Fennel
 - `frork.utils` — utility functions exposed to Lua/Fennel scripts
 
-`run_code` also sets `ok` and `no` as globals for `-e` code; a script requires them from `frork`. Both declarations go through `Frork::declare`, which builds the assertion, evaluates its status, and passes the `Declaration` (`Ok` or `No`) with the status and assertion to the `StatusHandler`. The handler belongs to the caller: `report::render` turns the three into the printed lines, and `report::action` maps a declaration and status to an `Action` (`Nothing`, `Create`, `PromptUpdate`, or `Remove`), so frork-cli and frork-lua share the decision and differ only in how they carry it out.
+`run_code` also sets `ok` and `no` as globals for `-e` code; a script requires them from `frork`. Both declarations go through `Frork::declare`, which builds the assertion, evaluates its status, and passes the `Declaration` (`Ok` or `No`) with the status and assertion to the `StatusHandler`. Any failure along the way, the handler's included, is wrapped in `FrorkError::Declaration` with the assertion and the calling `file:line` (from `lua.inspect_stack`). Fennel compiles with `correlate`, so that line, Lua's error positions, and tracebacks all match the script. The handler belongs to the caller: `report::render` turns the three into the printed lines, and `report::action` maps a declaration and status to an `Action` (`Nothing`, `Create`, `PromptUpdate`, or `Remove`), so frork-cli and frork-lua share the decision and differ only in how they carry it out.
 
 ### Utils module
 

@@ -55,7 +55,7 @@ impl FromStr for ExpandedPath {
 impl FromLua for ExpandedPath {
     fn from_lua(value: LuaValue, lua: &Lua) -> LuaResult<Self> {
         let path_str = String::from_lua(value, lua)?;
-        Self::new(&path_str).map_err(LuaError::external)
+        Self::new(&path_str).map_err(FrorkError::into_lua_error)
     }
 }
 
@@ -238,53 +238,53 @@ impl IntoLua for Utils {
         // strands the `?` failure path on its own line, where it reads as an
         // uncovered line that no test can reach.
         let expand_path = lua.create_function(|_lua, path: String| {
-            Utils::expand_path(&path).map_err(LuaError::external)
+            Utils::expand_path(&path).map_err(FrorkError::into_lua_error)
         })?;
         utils_table.set("expand-path", expand_path)?;
 
         let dirname = lua.create_function(|_lua, path: String| {
-            Utils::dirname(&path).map_err(LuaError::external)
+            Utils::dirname(&path).map_err(FrorkError::into_lua_error)
         })?;
         utils_table.set("dirname", dirname)?;
 
         let chomp = lua.create_function(|_lua, s: String| Ok(Utils::chomp(&s)))?;
         utils_table.set("chomp", chomp)?;
 
-        let platform = Utils::platform().map_err(LuaError::external)?;
+        let platform = Utils::platform().map_err(FrorkError::into_lua_error)?;
         utils_table.set("platform", platform)?;
 
         let sh = lua.create_function(|_lua, args: LuaVariadic<String>| {
             let mut args_iter = args.into_iter();
-            let cmd = args_iter.next().ok_or_else(|| {
-                LuaError::external(FrorkError::InvalidArguments(
-                    "sh requires at least a command".to_string(),
-                ))
-            })?;
+            let missing = || FrorkError::MissingCommand { function: "sh" }.into_lua_error();
+            let cmd = args_iter.next().ok_or_else(missing)?;
             let cmd_args: Vec<String> = args_iter.collect();
 
+            // A command that can't run reports as nils and -1, so scripts
+            // can probe with it; the reason only goes to the log.
             Ok(Utils::sh(&cmd, &cmd_args)
                 .map(|out| (Some(out.stdout), Some(out.stderr), out.status))
-                .unwrap_or((None, None, -1)))
+                .unwrap_or_else(|err| {
+                    let reason = err.full_message();
+                    debug!("sh: {reason}"); // cov-excl-line
+                    (None, None, -1)
+                }))
         })?;
         utils_table.set("sh", sh)?;
 
         let sh_strict = lua.create_function(|_lua, args: LuaVariadic<String>| {
             let mut args_iter = args.into_iter();
-            let cmd = args_iter.next().ok_or_else(|| {
-                LuaError::external(FrorkError::InvalidArguments(
-                    "sh requires at least a command".to_string(),
-                ))
-            })?;
+            let missing = || FrorkError::MissingCommand { function: "sh!" }.into_lua_error();
+            let cmd = args_iter.next().ok_or_else(missing)?;
             let cmd_args: Vec<String> = args_iter.collect();
 
             Utils::sh(&cmd, &cmd_args)
                 .map(|out| (Some(out.stdout), Some(out.stderr), out.status))
-                .map_err(LuaError::external)
+                .map_err(FrorkError::into_lua_error)
         })?;
         utils_table.set("sh!", sh_strict)?;
 
         let assert_bin = lua.create_function(|_lua, bin_name: String| {
-            Utils::assert_bin(&bin_name).map_err(LuaError::external)
+            Utils::assert_bin(&bin_name).map_err(FrorkError::into_lua_error)
         })?;
         utils_table.set("assert-bin", assert_bin)?;
 
@@ -295,6 +295,7 @@ impl IntoLua for Utils {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Cause;
     use std::env;
 
     /// A lookup backed by fixed pairs, standing in for the process
@@ -421,12 +422,21 @@ mod tests {
 
         let error = result.unwrap_err();
         assert!(error.to_string().contains("sh requires at least a command"));
+        let error = Cause::from(error);
+        assert!(matches!(
+            error.frork(),
+            Some(FrorkError::MissingCommand { function: "sh" })
+        ));
 
         // `sh!` shares the argument check but propagates instead of returning nil.
         let result = lua
             .load(r#"return utils["sh!"]()"#)
             .eval::<(Option<String>, Option<String>, i32)>();
-        assert!(result.is_err());
+        let error = Cause::from(result.unwrap_err());
+        assert!(matches!(
+            error.frork(),
+            Some(FrorkError::MissingCommand { function: "sh!" })
+        ));
     }
 
     #[test]

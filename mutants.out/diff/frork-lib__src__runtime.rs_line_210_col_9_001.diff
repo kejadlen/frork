@@ -1,0 +1,53 @@
+--- frork-lib/src/runtime.rs
++++ replace Frork<F>::declare -> LuaResult<()> with LuaResult::from_iter([()])
+@@ -202,49 +202,17 @@
+ impl<F: StatusHandler> Frork<F> {
+     fn provide(&self, name: &str, lua_provider: LuaProvider) -> LuaResult<()> {
+         self.providers.borrow_mut().provide(name, lua_provider);
+         info!("Added provider: {}", name);
+         Ok(())
+     }
+ 
+     fn declare(&self, declaration: Declaration, lua: &Lua, args: LuaMultiValue) -> LuaResult<()> {
+-        let location = caller_location(lua);
+-        // Every failure names the declaration and where the script made it,
+-        // which a recovered error would otherwise have lost with the Lua
+-        // traceback.
+-        let fail = |subject: Option<String>, source: FrorkError| {
+-            let error = FrorkError::Declaration {
+-                declaration,
+-                subject,
+-                location: location.clone(),
+-                source: source.into(),
+-            };
+-            error.into_lua_error()
+-        };
+-
+-        let mut args_iter = args.into_iter();
+-        let provider = args_iter.next().and_then(|v| v.to_string().ok());
+-        let provider =
+-            provider.ok_or_else(|| fail(None, FrorkError::MissingAssertionType { declaration }))?;
+-        let named = || Some(provider.clone());
+-
+-        let assertion_args: LuaMultiValue = args_iter.collect();
+-
+-        let factory = self.providers.borrow().get_factory(&provider);
+-        let factory = factory.map_err(|e| fail(named(), e))?;
+-        let assertion = factory.build(&provider, lua, assertion_args);
+-        let assertion = assertion.map_err(|e| fail(named(), e))?;
+-        let described = || Some(assertion.to_string());
+-        let status = assertion.status();
+-        let status = status.map_err(|e| fail(described(), e))?;
+-
+-        let handled = (self.handle_status)(declaration, &status, assertion.as_ref());
+-        handled.map_err(|e| fail(described(), e))?;
+-        Ok(())
++        LuaResult::from_iter([()]) /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ impl<F: StatusHandler> IntoLua for Frork<F> {
+     fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
+         let frork_table = lua.create_table()?;
+         let frork = Rc::new(self);
+ 

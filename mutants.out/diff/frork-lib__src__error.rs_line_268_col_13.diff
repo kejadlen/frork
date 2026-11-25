@@ -1,0 +1,26 @@
+--- frork-lib/src/error.rs
++++ delete match arm LuaError::ExternalError(external) in Cause::recover
+@@ -260,22 +260,17 @@
+ 
+     /// Walks the `CallbackError`/`WithContext` layers mlua wraps an error
+     /// in, however deep, to the `FrorkError` at the bottom.
+     fn recover(err: &LuaError) -> Option<FrorkError> {
+         match err {
+             LuaError::CallbackError { cause, .. } | LuaError::WithContext { cause, .. } => {
+                 Self::recover(cause)
+             }
+-            LuaError::ExternalError(external) => {
+-                let raised = external.downcast_ref::<Raised>().map(|raised| &raised.0);
+-                raised
+-                    .or_else(|| external.downcast_ref::<FrorkError>())
+-                    .cloned()
+-            }
++             /* ~ changed by cargo-mutants ~ */
+             _ => None,
+         }
+     }
+ }
+ 
+ impl From<FrorkError> for Cause {
+     fn from(err: FrorkError) -> Self {
+         Cause::Frork(Box::new(err))

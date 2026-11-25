@@ -111,7 +111,7 @@ where
             .map(|t| Box::new(t) as Box<dyn Assertion>)
             .map_err(|source| FrorkError::AssertionBuild {
                 provider: name.to_string(),
-                source,
+                source: source.into(),
             })
     }
 }
@@ -680,10 +680,7 @@ impl Assertion for Debug {
         if let Some(ref status_fn) = self.status_fn {
             let result = status_fn
                 .call::<Status>(LuaMultiValue::new())
-                .map_err(|source| FrorkError::DebugHook {
-                    hook: "status",
-                    source,
-                })?;
+                .map_err(hook_failed("debug", "status"))?;
             Ok(result)
         } else {
             Ok(Status::Present)
@@ -698,10 +695,7 @@ impl Assertion for Debug {
             .ok_or_else(|| missing_hook("create", "debug"))?;
         create_fn
             .call::<()>(LuaMultiValue::new())
-            .map_err(|source| FrorkError::DebugHook {
-                hook: "create",
-                source,
-            })?;
+            .map_err(hook_failed("debug", "create"))?;
         Ok(())
     }
 
@@ -719,11 +713,19 @@ impl Assertion for Debug {
             .ok_or_else(|| missing_hook("remove", "debug"))?;
         remove_fn
             .call::<()>(LuaMultiValue::new())
-            .map_err(|source| FrorkError::DebugHook {
-                hook: "remove",
-                source,
-            })?;
+            .map_err(hook_failed("debug", "remove"))?;
         Ok(())
+    }
+}
+
+/// Wraps a failed call into a Fennel-defined hook so the error names the
+/// provider and hook, keeping any `FrorkError` raised inside it whole.
+fn hook_failed(provider: &str, hook: &'static str) -> impl FnOnce(LuaError) -> FrorkError {
+    let provider = provider.to_string();
+    move |source| FrorkError::ProviderHook {
+        provider,
+        hook,
+        source: source.into(),
     }
 }
 
@@ -814,7 +816,7 @@ impl Assertion for LuaAssertion {
             .provider
             .status_fn
             .call::<Status>(self.args.clone())
-            .map_err(FrorkError::from)?;
+            .map_err(hook_failed(&self.name, "status"))?;
         Ok(result)
     }
 
@@ -822,7 +824,7 @@ impl Assertion for LuaAssertion {
         self.provider
             .create_fn
             .call::<()>(self.args.clone())
-            .map_err(FrorkError::from)?;
+            .map_err(hook_failed(&self.name, "create"))?;
         debug!("created: {}", self);
         Ok(())
     }
@@ -833,7 +835,7 @@ impl Assertion for LuaAssertion {
         if let Some(update_fn) = self.provider.update_fn.as_ref() {
             update_fn
                 .call::<()>(self.args.clone())
-                .map_err(FrorkError::from)?;
+                .map_err(hook_failed(&self.name, "update"))?;
         } else {
             self.create()?;
         }
@@ -849,7 +851,7 @@ impl Assertion for LuaAssertion {
             .ok_or_else(|| missing_hook("remove", &self.name))?;
         remove_fn
             .call::<()>(self.args.clone())
-            .map_err(FrorkError::from)?;
+            .map_err(hook_failed(&self.name, "remove"))?;
         debug!("removed: {}", self);
         Ok(())
     }
@@ -1829,7 +1831,10 @@ mod tests {
     /// along as the source rather than being flattened into the message.
     fn assert_hook_failure(error: &FrorkError, hook: &str) {
         use std::error::Error as _;
-        assert_eq!(error.to_string(), format!("Debug {hook} function failed"));
+        assert_eq!(
+            error.to_string(),
+            format!("{hook} hook of provider :debug failed")
+        );
         let source = error.source().expect("the Lua failure is the source");
         assert!(
             source.to_string().contains(&format!("{hook} boom")),

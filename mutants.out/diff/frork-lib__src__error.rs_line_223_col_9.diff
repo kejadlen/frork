@@ -1,0 +1,24 @@
+--- frork-lib/src/error.rs
++++ replace FrorkError::root -> &FrorkError with Box::leak(Box::new(Default::default()))
+@@ -215,20 +215,17 @@
+             message.push_str(&help.to_string());
+         }
+         message
+     }
+ 
+     /// The innermost `FrorkError`, past every context layer: the error that
+     /// says what actually went wrong.
+     pub fn root(&self) -> &FrorkError {
+-        match self.nested() {
+-            Some(inner) => inner.root(),
+-            None => self,
+-        }
++        Box::leak(Box::new(Default::default())) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     fn nested(&self) -> Option<&FrorkError> {
+         match self {
+             FrorkError::Declaration { source, .. }
+             | FrorkError::AssertionBuild { source, .. }
+             | FrorkError::ProviderHook { source, .. }
+             | FrorkError::LuaBridge { source, .. }

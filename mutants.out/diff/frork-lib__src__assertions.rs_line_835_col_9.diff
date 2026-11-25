@@ -1,0 +1,29 @@
+--- frork-lib/src/assertions.rs
++++ replace <impl Assertion for LuaAssertion>::update -> Result<(), FrorkError> with Ok(())
+@@ -827,25 +827,17 @@
+             .map_err(hook_failed(&self.name, "create"))?;
+         debug!("created: {}", self);
+         Ok(())
+     }
+ 
+     fn update(&self) -> Result<(), FrorkError> {
+         // A missing update function falls back to create — re-running the
+         // create is the default way to bring a drifted assertion in line.
+-        if let Some(update_fn) = self.provider.update_fn.as_ref() {
+-            update_fn
+-                .call::<()>(self.args.clone())
+-                .map_err(hook_failed(&self.name, "update"))?;
+-        } else {
+-            self.create()?;
+-        }
+-        debug!("updated: {}", self);
+-        Ok(())
++        Ok(()) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     fn remove(&self) -> Result<(), FrorkError> {
+         let remove_fn = self
+             .provider
+             .remove_fn
+             .as_ref()
+             .ok_or_else(|| missing_hook("remove", &self.name))?;

@@ -1,0 +1,30 @@
+--- frork-lib/src/assertions.rs
++++ replace <impl Assertion for LuaAssertion>::remove -> Result<(), FrorkError> with Ok(())
+@@ -839,26 +839,17 @@
+         } else {
+             self.create()?;
+         }
+         debug!("updated: {}", self);
+         Ok(())
+     }
+ 
+     fn remove(&self) -> Result<(), FrorkError> {
+-        let remove_fn = self
+-            .provider
+-            .remove_fn
+-            .as_ref()
+-            .ok_or_else(|| missing_hook("remove", &self.name))?;
+-        remove_fn
+-            .call::<()>(self.args.clone())
+-            .map_err(hook_failed(&self.name, "remove"))?;
+-        debug!("removed: {}", self);
+-        Ok(())
++        Ok(()) /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+     use std::cell::RefCell;
+     use std::collections::VecDeque;

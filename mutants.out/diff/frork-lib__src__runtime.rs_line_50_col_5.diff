@@ -1,0 +1,22 @@
+--- frork-lib/src/runtime.rs
++++ replace bridge -> Result<T, FrorkError> with Ok(Default::default())
+@@ -42,18 +42,17 @@
+     T: Fn(Declaration, &Status, &dyn Assertion) -> Result<(), FrorkError> + Clone + 'static
+ {
+ }
+ 
+ /// Wraps a call into the Lua bridge so a failure names the step that broke.
+ fn bridge<T>(step: &'static str, result: LuaResult<T>) -> Result<T, FrorkError> {
+     // Two steps, so the closure fits on one line: no bridge step fails in
+     // a test, and a multi-line closure strands uncoverable lines.
+-    let result = result.map_err(Cause::from);
+-    result.map_err(|source| FrorkError::LuaBridge { step, source })
++    Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Fennel options for every compile: correlated output keeps each Lua line
+ /// on its Fennel line, so Lua's error positions and tracebacks, and the
+ /// locations `declare` reports, name lines in the script.
+ fn fennel_options(lua: &Lua) -> LuaResult<LuaTable> {
+     let options = lua.create_table()?;
+     options.set("correlate", true)?;

@@ -1,0 +1,29 @@
+--- frork-lib/src/assertions.rs
++++ replace <impl Assertion for Debug>::remove -> Result<(), FrorkError> with Ok(())
+@@ -701,25 +701,17 @@
+ 
+     // cov-excl-start
+     fn update(&self) -> Result<(), FrorkError> {
+         todo!()
+     }
+     // cov-excl-stop
+ 
+     fn remove(&self) -> Result<(), FrorkError> {
+-        info!("debug: removing");
+-        let remove_fn = self
+-            .remove_fn
+-            .as_ref()
+-            .ok_or_else(|| missing_hook("remove", "debug"))?;
+-        remove_fn
+-            .call::<()>(LuaMultiValue::new())
+-            .map_err(hook_failed("debug", "remove"))?;
+-        Ok(())
++        Ok(()) /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ /// Wraps a failed call into a Fennel-defined hook so the error names the
+ /// provider and hook, keeping any `FrorkError` raised inside it whole.
+ fn hook_failed(provider: &str, hook: &'static str) -> impl FnOnce(LuaError) -> FrorkError {
+     let provider = provider.to_string();
+     move |source| FrorkError::ProviderHook {

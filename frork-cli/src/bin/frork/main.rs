@@ -5,6 +5,8 @@ use clap::Subcommand;
 use clap_complete::Shell;
 use frork_lib::assertions::Assertion;
 use frork_lib::assertions::Status;
+use frork_lib::error::FrorkError;
+use frork_lib::error::SharedError;
 use frork_lib::report;
 use frork_lib::report::Action;
 use frork_lib::runtime::Declaration;
@@ -13,7 +15,6 @@ use frork_lib::runtime::run_code;
 use frork_lib::runtime::run_script;
 use miette::IntoDiagnostic as _;
 use miette::Result;
-use miette::miette;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt;
@@ -96,12 +97,20 @@ fn run(command: &Commands) -> Result<()> {
     }
 }
 
-fn check(declaration: Declaration, status: &Status, assertion: &dyn Assertion) -> Result<()> {
+fn check(
+    declaration: Declaration,
+    status: &Status,
+    assertion: &dyn Assertion,
+) -> Result<(), FrorkError> {
     print_lines(&report::render(declaration, status, assertion));
     Ok(())
 }
 
-fn apply(declaration: Declaration, status: &Status, assertion: &dyn Assertion) -> Result<()> {
+fn apply(
+    declaration: Declaration,
+    status: &Status,
+    assertion: &dyn Assertion,
+) -> Result<(), FrorkError> {
     print_lines(&report::render(declaration, status, assertion));
     match report::action(declaration, status) {
         Action::Nothing => {}
@@ -131,17 +140,21 @@ fn print_lines(lines: &[String]) {
     }
 }
 
-fn prompt(question: &str) -> Result<String> {
+fn prompt(question: &str) -> Result<String, FrorkError> {
     use std::io::Write as _;
 
     print!("{question}");
-    std::io::stdout()
-        .flush()
-        .map_err(|e| miette!("Failed to flush stdout: {e}"))?;
+    std::io::stdout().flush().map_err(|e| FrorkError::Prompt {
+        step: "flush stdout",
+        source: SharedError::new(e),
+    })?;
 
     let mut input = String::new();
     std::io::stdin()
         .read_line(&mut input)
-        .map_err(|e| miette!("Failed to read input: {e}"))?;
+        .map_err(|e| FrorkError::Prompt {
+            step: "read input",
+            source: SharedError::new(e),
+        })?;
     Ok(input)
 }

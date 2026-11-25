@@ -1,0 +1,28 @@
+--- frork-lib/src/assertions.rs
++++ replace <impl Assertion for Debug>::status -> Result<Status, FrorkError> with Ok(Default::default())
+@@ -672,24 +672,17 @@
+ impl std::fmt::Display for Debug {
+     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+         write!(f, "debug")
+     }
+ }
+ 
+ impl Assertion for Debug {
+     fn status(&self) -> Result<Status, FrorkError> {
+-        if let Some(ref status_fn) = self.status_fn {
+-            let result = status_fn
+-                .call::<Status>(LuaMultiValue::new())
+-                .map_err(hook_failed("debug", "status"))?;
+-            Ok(result)
+-        } else {
+-            Ok(Status::Present)
+-        }
++        Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     fn create(&self) -> Result<(), FrorkError> {
+         info!("debug: creating");
+         let create_fn = self
+             .create_fn
+             .as_ref()
+             .ok_or_else(|| missing_hook("create", "debug"))?;

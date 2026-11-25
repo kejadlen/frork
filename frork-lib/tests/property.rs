@@ -24,6 +24,7 @@ use frork_lib::assertions::LuaAssertion;
 use frork_lib::assertions::LuaProvider;
 use frork_lib::assertions::Status;
 use frork_lib::assertions::Symlink;
+use frork_lib::error::Cause;
 use frork_lib::error::FrorkError;
 use frork_lib::registry::Providers;
 use frork_lib::report;
@@ -580,17 +581,17 @@ fn frork_error(tc: &TestCase) -> FrorkError {
             declaration: Declaration::Ok,
         },
         1 => FrorkError::UnknownProvider { name: detail },
-        2 => FrorkError::InvalidArguments(detail),
+        2 => FrorkError::MissingCommand { function: "sh" },
         3 => FrorkError::MissingAssertionType {
             declaration: Declaration::No,
         },
-        _ => FrorkError::Lua(LuaError::RuntimeError(detail)),
+        _ => FrorkError::ScriptEval(LuaError::RuntimeError(detail).into()),
     }
 }
 
 fn raising(lua: &Lua, error: &FrorkError) -> LuaFunction {
     let error = error.clone();
-    lua.create_function(move |_lua, ()| -> LuaResult<()> { Err(LuaError::external(error.clone())) })
+    lua.create_function(move |_lua, ()| -> LuaResult<()> { Err(error.clone().into_lua_error()) })
         .unwrap()
 }
 
@@ -601,8 +602,8 @@ fn frork_error_survives_a_rust_callback(tc: TestCase) {
 
     let caught = raising(&lua, &error).call::<()>(()).unwrap_err();
     assert_eq!(
-        format!("{:?}", FrorkError::from(caught)),
-        format!("{error:?}")
+        format!("{:?}", Cause::from(caught).frork()),
+        format!("{:?}", Some(&error))
     );
 }
 
@@ -614,8 +615,8 @@ fn frork_error_survives_a_lua_caller(tc: TestCase) {
 
     let caught = caller.call::<()>(raising(&lua, &error)).unwrap_err();
     assert_eq!(
-        format!("{:?}", FrorkError::from(caught)),
-        format!("{error:?}")
+        format!("{:?}", Cause::from(caught).frork()),
+        format!("{:?}", Some(&error))
     );
 }
 

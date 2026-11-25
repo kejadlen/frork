@@ -1,0 +1,27 @@
+--- frork-lib/src/error.rs
++++ replace <impl std::fmt::Display for Cause>::fmt -> std::fmt::Result with Ok(Default::default())
+@@ -288,23 +288,17 @@
+             Some(frork) => frork.into(),
+             None => Cause::Lua(Box::new(err)),
+         }
+     }
+ }
+ 
+ impl std::fmt::Display for Cause {
+     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+-        match self {
+-            Cause::Frork(err) => err.fmt(f),
+-            Cause::Lua(err) => match err.as_ref() {
+-                LuaError::RuntimeError(message) => f.write_str(trim_traceback(message)),
+-                err => err.fmt(f),
+-            },
+-        }
++        Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ /// A Fennel parse or compile error already says where the script went
+ /// wrong; the traceback after it only walks the compiler's internals.
+ fn trim_traceback(message: &str) -> &str {
+     let is_fennel_error = message.contains("Parse error:") || message.contains("Compile error:");
+     match message.split_once("\nstack traceback:") {

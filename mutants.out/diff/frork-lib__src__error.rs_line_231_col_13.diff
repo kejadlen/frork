@@ -1,0 +1,26 @@
+--- frork-lib/src/error.rs
++++ delete match arm FrorkError::Declaration{source, ..} | FrorkError::AssertionBuild{source, ..} | FrorkError::ProviderHook{source, ..} | FrorkError::LuaBridge{source, ..} | FrorkError::ScriptEval(source) | FrorkError::ScriptRun{source, ..} in FrorkError::nested
+@@ -223,22 +223,17 @@
+         match self.nested() {
+             Some(inner) => inner.root(),
+             None => self,
+         }
+     }
+ 
+     fn nested(&self) -> Option<&FrorkError> {
+         match self {
+-            FrorkError::Declaration { source, .. }
+-            | FrorkError::AssertionBuild { source, .. }
+-            | FrorkError::ProviderHook { source, .. }
+-            | FrorkError::LuaBridge { source, .. }
+-            | FrorkError::ScriptEval(source)
+-            | FrorkError::ScriptRun { source, .. } => source.frork(),
++             /* ~ changed by cargo-mutants ~ */
+             _ => None,
+         }
+     }
+ }
+ 
+ /// What a context variant wraps: a `FrorkError` recovered from the far side
+ /// of the Lua boundary, or the Lua error itself when there is none. It is
+ /// transparent, so the inner error's message, help, and causes render as if
