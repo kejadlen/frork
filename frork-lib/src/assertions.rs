@@ -12,6 +12,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::error::FrorkError;
+use crate::utils::CommandOutput;
 use crate::utils::ExpandedPath;
 use crate::utils::Utils;
 
@@ -333,16 +334,16 @@ impl Assertion for Git {
             "--get",
             "remote.origin.url",
         ];
-        let (remote_output, exit_code) = Utils::sh("git", &config_args)?;
+        let output = Utils::sh("git", &config_args)?;
 
-        if exit_code != 0 {
+        if output.status != 0 {
             return Ok(Status::Drifted(Drift {
                 expected: format!("git repo with remote {}", self.remote_url),
                 actual: "failed to get remote url".to_string(),
             }));
         }
 
-        let current_remote = Utils::chomp(&remote_output);
+        let current_remote = Utils::chomp(&output.stdout);
         if current_remote == self.remote_url {
             Ok(Status::Present)
         } else {
@@ -356,10 +357,13 @@ impl Assertion for Git {
     fn create(&self) -> Result<()> {
         Utils::assert_bin("git")?;
 
-        let (_output, exit_code) = Utils::sh("git", &["clone", &self.remote_url, &self.dir])?;
+        let output = Utils::sh("git", &["clone", &self.remote_url, &self.dir])?;
 
-        if exit_code != 0 {
-            return Err(miette!("Failed to clone git repository"));
+        if output.status != 0 {
+            return Err(miette!(
+                "Failed to clone git repository: {}",
+                output.stderr.trim()
+            ));
         }
 
         debug!("created: {}", self);
@@ -418,11 +422,16 @@ impl Git {
 
     fn git(&self, args: &[&str]) -> Result<String> {
         let in_dir = [&["-C", self.dir.as_str()], args].concat();
-        let (output, exit_code) = Utils::sh("git", &in_dir)?;
-        if exit_code != 0 {
-            return Err(miette!("`git {}` failed in {}", args.join(" "), self.dir));
+        let output = Utils::sh("git", &in_dir)?;
+        if output.status != 0 {
+            return Err(miette!(
+                "`git {}` failed in {}: {}",
+                args.join(" "),
+                self.dir,
+                output.stderr.trim()
+            ));
         }
-        Ok(output)
+        Ok(output.stdout)
     }
 }
 
@@ -431,13 +440,13 @@ impl Git {
 /// only tests substitute anything else.
 pub trait CommandRunner {
     fn has_bin(&self, bin: &str) -> bool;
-    fn run(&self, cmd: &str, args: &[&str]) -> Result<(String, i32)>;
+    fn run(&self, cmd: &str, args: &[&str]) -> Result<CommandOutput>;
     fn run_with_envs(
         &self,
         cmd: &str,
         args: &[&str],
         envs: &[(&str, &str)],
-    ) -> Result<(String, i32)>;
+    ) -> Result<CommandOutput>;
 
     fn require_bin(&self, bin: &str) -> Result<()> {
         if self.has_bin(bin) {
@@ -455,7 +464,7 @@ impl CommandRunner for SystemRunner {
         Utils::assert_bin(bin).is_ok()
     }
 
-    fn run(&self, cmd: &str, args: &[&str]) -> Result<(String, i32)> {
+    fn run(&self, cmd: &str, args: &[&str]) -> Result<CommandOutput> {
         Utils::sh(cmd, args)
     }
 
@@ -464,7 +473,7 @@ impl CommandRunner for SystemRunner {
         cmd: &str,
         args: &[&str],
         envs: &[(&str, &str)],
-    ) -> Result<(String, i32)> {
+    ) -> Result<CommandOutput> {
         Utils::sh_with_envs(cmd, args, envs)
     }
 }
@@ -495,8 +504,8 @@ impl<R: CommandRunner> Assertion for Brew<R> {
             return Ok(Status::Absent);
         }
 
-        let (_output, exit_code) = self.runner.run("brew", &["--version"])?;
-        if exit_code == 0 {
+        let output = self.runner.run("brew", &["--version"])?;
+        if output.status == 0 {
             Ok(Status::Present)
         } else {
             Ok(Status::Absent)
@@ -509,10 +518,13 @@ impl<R: CommandRunner> Assertion for Brew<R> {
             "-c",
             r#"/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)""#,
         ];
-        let (output, exit_code) = self.runner.run("bash", &install_args)?;
+        let output = self.runner.run("bash", &install_args)?;
 
-        if exit_code != 0 {
-            return Err(miette!("Failed to install Homebrew: {}", output));
+        if output.status != 0 {
+            return Err(miette!(
+                "Failed to install Homebrew: {}",
+                output.stderr.trim()
+            ));
         }
 
         debug!("created: {}", self);
@@ -574,20 +586,20 @@ impl<R: CommandRunner> Assertion for BrewBundle<R> {
         let no_auto_update = [("HOMEBREW_NO_AUTO_UPDATE", "true")];
 
         let strict_args = ["bundle", "check", "--no-upgrade", file_arg.as_str()];
-        let (_output, exit_code) =
-            self.runner
-                .run_with_envs("brew", &strict_args, &no_auto_update)?;
+        let output = self
+            .runner
+            .run_with_envs("brew", &strict_args, &no_auto_update)?;
 
-        if exit_code != 0 {
+        if output.status != 0 {
             return Ok(Status::Absent);
         }
 
         let check_args = ["bundle", "check", file_arg.as_str()];
-        let (_output, exit_code) =
-            self.runner
-                .run_with_envs("brew", &check_args, &no_auto_update)?;
+        let output = self
+            .runner
+            .run_with_envs("brew", &check_args, &no_auto_update)?;
 
-        if exit_code != 0 {
+        if output.status != 0 {
             return Ok(Status::Drifted(Drift {
                 expected: "up-to-date packages".to_string(),
                 actual: "packages need upgrade".to_string(),
@@ -607,12 +619,15 @@ impl<R: CommandRunner> Assertion for BrewBundle<R> {
         self.runner.require_bin("brew")?;
 
         let file_arg = format!("--file={}", self.brewfile);
-        let (_output, exit_code) = self
+        let output = self
             .runner
             .run("brew", &["bundle", "install", file_arg.as_str()])?;
 
-        if exit_code != 0 {
-            return Err(miette!("Failed to install brew bundle"));
+        if output.status != 0 {
+            return Err(miette!(
+                "Failed to install brew bundle: {}",
+                output.stderr.trim()
+            ));
         }
 
         debug!("created: {}", self);
@@ -1184,8 +1199,8 @@ mod tests {
 
     fn bare_origin(dir: &Path) -> String {
         let origin = dir.join("origin.git");
-        let (_out, code) = Utils::sh("git", &["init", "--bare", origin.to_str().unwrap()]).unwrap();
-        assert_eq!(code, 0);
+        let output = Utils::sh("git", &["init", "--bare", origin.to_str().unwrap()]).unwrap();
+        assert_eq!(output.status, 0);
         origin.to_str().unwrap().to_string()
     }
 
@@ -1260,7 +1275,10 @@ mod tests {
         };
 
         let error = git.create().unwrap_err();
-        assert!(error.to_string().contains("Failed to clone git repository"));
+        let message = error.to_string();
+        assert!(message.contains("Failed to clone git repository"));
+        // The reason git printed on stderr rides along with the failure.
+        assert!(message.contains("does not exist"), "{message}");
     }
 
     #[test]
@@ -1295,8 +1313,8 @@ mod tests {
             "-C",
             dir.to_str().unwrap(),
         ];
-        let (_out, code) = Utils::sh("git", &[&isolated[..], args].concat()).unwrap();
-        assert_eq!(code, 0, "git {args:?}");
+        let output = Utils::sh("git", &[&isolated[..], args].concat()).unwrap();
+        assert_eq!(output.status, 0, "git {args:?}");
     }
 
     /// A clone of an origin holding one pushed commit, plus its assertion.
@@ -1387,7 +1405,9 @@ mod tests {
         fs::write(clone.join(".git/index"), "corrupt").unwrap();
 
         let error = git.remove().unwrap_err();
-        assert!(error.to_string().contains("`git status"), "{error}");
+        let message = error.to_string();
+        assert!(message.contains("`git status"), "{message}");
+        assert!(message.contains("index file"), "{message}");
         assert!(clone.join(".git").is_dir());
     }
 
@@ -1491,7 +1511,7 @@ mod tests {
             !self.missing_bins.contains(&bin)
         }
 
-        fn run(&self, cmd: &str, args: &[&str]) -> Result<(String, i32)> {
+        fn run(&self, cmd: &str, args: &[&str]) -> Result<CommandOutput> {
             self.run_with_envs(cmd, args, &[])
         }
 
@@ -1500,12 +1520,16 @@ mod tests {
             cmd: &str,
             args: &[&str],
             _envs: &[(&str, &str)],
-        ) -> Result<(String, i32)> {
+        ) -> Result<CommandOutput> {
             self.calls
                 .borrow_mut()
                 .push(format!("{cmd} {}", args.join(" ")));
-            let exit_code = self.exit_codes.borrow_mut().pop_front().unwrap_or(0);
-            Ok((format!("output of {cmd}"), exit_code))
+            let status = self.exit_codes.borrow_mut().pop_front().unwrap_or(0);
+            Ok(CommandOutput {
+                stdout: format!("output of {cmd}"),
+                stderr: format!("stderr of {cmd}"),
+                status,
+            })
         }
     }
 
@@ -1516,15 +1540,16 @@ mod tests {
         assert!(runner.has_bin("sh"));
         assert!(!runner.has_bin("frork-does-not-exist"));
 
-        let (stdout, exit_code) = runner.run("echo", &["hello"]).unwrap();
-        assert_eq!(stdout.trim(), "hello");
-        assert_eq!(exit_code, 0);
+        let output = runner.run("echo", &["hello"]).unwrap();
+        assert_eq!(output.stdout.trim(), "hello");
+        assert_eq!(output.stderr, "");
+        assert_eq!(output.status, 0);
 
-        let (stdout, exit_code) = runner
+        let output = runner
             .run_with_envs("sh", &["-c", "echo $RUNNER_VAR"], &[("RUNNER_VAR", "set")])
             .unwrap();
-        assert_eq!(stdout.trim(), "set");
-        assert_eq!(exit_code, 0);
+        assert_eq!(output.stdout.trim(), "set");
+        assert_eq!(output.status, 0);
     }
 
     #[test]
@@ -1583,7 +1608,10 @@ mod tests {
             runner: FakeRunner::new(&[1]),
         };
         let error = brew.create().unwrap_err();
-        assert!(error.to_string().contains("Failed to install Homebrew"));
+        let message = error.to_string();
+        assert!(message.contains("Failed to install Homebrew"));
+        // The installer speaks on stderr, not stdout.
+        assert!(message.contains("stderr of bash"), "{message}");
     }
 
     fn assert_remove_unsupported(error: miette::Report, provider: &str) {
@@ -1691,7 +1719,9 @@ mod tests {
 
         let bundle = brew_bundle(FakeRunner::new(&[1]));
         let error = bundle.create().unwrap_err();
-        assert!(error.to_string().contains("Failed to install brew bundle"));
+        let message = error.to_string();
+        assert!(message.contains("Failed to install brew bundle"));
+        assert!(message.contains("stderr of brew"), "{message}");
     }
 
     // --- Debug ---

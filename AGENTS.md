@@ -157,7 +157,7 @@ The `Providers` struct in `registry.rs` dispatches provider names. It checks pro
 - `dirname` — returns the parent directory of a path
 - `chomp` — trims trailing newlines
 - `platform` — returns the lowercase OS name (via `uname -s`)
-- `sh` — runs a shell command, returns `(stdout, exit_code)` or `(nil, -1)` on failure
+- `sh` — runs a shell command, returns `(stdout, stderr, exit_code)` or `(nil, nil, -1)` on failure
 - `sh!` — like `sh` but propagates errors to Lua
 - `assert-bin` — checks that a binary exists in PATH
 

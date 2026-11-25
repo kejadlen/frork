@@ -655,11 +655,11 @@ fn remote_url() -> impl Generator<String> {
 fn repo_with_origin(root: &Path, url: &str) -> ExpandedPath {
     let repo = root.join("repo");
     let repo_str = repo.to_str().unwrap();
-    let (_out, code) = Utils::sh("git", &["init", "-q", repo_str]).unwrap();
-    assert_eq!(code, 0);
+    let output = Utils::sh("git", &["init", "-q", repo_str]).unwrap();
+    assert_eq!(output.status, 0);
     let config = ["-C", repo_str, "config", "remote.origin.url", url];
-    let (_out, code) = Utils::sh("git", &config).unwrap();
-    assert_eq!(code, 0, "git config rejected {url:?}");
+    let output = Utils::sh("git", &config).unwrap();
+    assert_eq!(output.status, 0, "git config rejected {url:?}");
     expanded(&repo)
 }
 
@@ -696,6 +696,29 @@ fn git_status_reports_any_other_remote_as_drift(tc: TestCase) {
 }
 
 // --- run_script ---
+
+#[hegel::test]
+fn sh_captures_each_stream_and_the_exit_code_verbatim(tc: TestCase) {
+    let payload = tc.draw(text().max_size(256));
+    let status: i32 = tc.draw(gs::integers().min_value(0).max_value(255));
+    let root = TempDir::new().unwrap();
+    let file = root.path().join("payload");
+    fs::write(&file, &payload).unwrap();
+
+    // The payload rides in a file and the exit code in a variable, so
+    // neither has to survive shell quoting.
+    let script = r#"cat "$FRORK_PBT_FILE"; cat "$FRORK_PBT_FILE" 1>&2; exit "$FRORK_PBT_CODE""#;
+    let code = status.to_string();
+    let envs = [
+        ("FRORK_PBT_FILE", file.to_str().unwrap()),
+        ("FRORK_PBT_CODE", code.as_str()),
+    ];
+    let output = Utils::sh_with_envs("sh", &["-c", script], &envs).unwrap();
+
+    assert_eq!(output.stdout, payload);
+    assert_eq!(output.stderr, payload);
+    assert_eq!(output.status, status);
+}
 
 #[hegel::test]
 fn run_script_runs_a_script_at_any_path(tc: TestCase) {

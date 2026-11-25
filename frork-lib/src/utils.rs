@@ -13,6 +13,15 @@ use tracing::debug;
 
 use crate::error::FrorkError;
 
+/// What one run of a command produced: each stream captured separately,
+/// plus its exit code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandOutput {
+    pub stdout: String,
+    pub stderr: String,
+    pub status: i32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpandedPath(String);
 
@@ -149,11 +158,11 @@ impl Utils {
     }
 
     pub fn platform() -> Result<String> {
-        let (output, _status) = Self::sh("uname", &["-s"])?;
-        Ok(Self::chomp(&output).to_lowercase())
+        let output = Self::sh("uname", &["-s"])?;
+        Ok(Self::chomp(&output.stdout).to_lowercase())
     }
 
-    pub fn sh<T: AsRef<str>>(cmd: &str, args: &[T]) -> Result<(String, i32)> {
+    pub fn sh<T: AsRef<str>>(cmd: &str, args: &[T]) -> Result<CommandOutput> {
         Self::sh_with_envs(cmd, args, &[])
     }
 
@@ -161,7 +170,7 @@ impl Utils {
         cmd: &str,
         args: &[T],
         env_vars: &[(&str, &str)],
-    ) -> Result<(String, i32)> {
+    ) -> Result<CommandOutput> {
         let args_display: Vec<&str> = args.iter().map(|arg| arg.as_ref()).collect();
         debug!(
             "Executing command: {} with args: {} and envs: {:?}",
@@ -178,28 +187,36 @@ impl Utils {
             .output()
             .map_err(|e| miette!("Failed to execute command '{}': {e}", cmd))?;
 
-        // `sh` hands stdout to Fennel as a string, and scripts compare it as
-        // text. Non-UTF-8 output would be unusable there either way.
+        // Both streams become Fennel strings and error-message text, which
+        // non-UTF-8 output is unusable as either way.
         #[allow(clippy::disallowed_methods)]
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        #[allow(clippy::disallowed_methods)]
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         let code = output.status.code();
         let status = code.ok_or_else(|| miette!("Command '{}' terminated by signal", cmd))?;
-        let trimmed = stdout.trim();
+        let stdout_trimmed = stdout.trim();
+        let stderr_trimmed = stderr.trim();
         debug!(
-            "Command '{}' completed with status {}, stdout: {}",
+            "Command '{}' completed with status {}, stdout: {}, stderr: {}",
             // The subscriber test exercises these, but nightly maps the
             // lazy format regions to a counter that never fires.
-            cmd,     // cov-excl-line
-            status,  // cov-excl-line
-            trimmed  // cov-excl-line
+            cmd,            // cov-excl-line
+            status,         // cov-excl-line
+            stdout_trimmed, // cov-excl-line
+            stderr_trimmed  // cov-excl-line
         );
-        Ok((stdout, status))
+        Ok(CommandOutput {
+            stdout,
+            stderr,
+            status,
+        })
     }
 
     pub fn assert_bin(bin_name: &str) -> Result<()> {
-        let (_output, exit_code) = Self::sh("which", &[bin_name])?;
+        let output = Self::sh("which", &[bin_name])?;
 
-        if exit_code == 0 {
+        if output.status == 0 {
             debug!("Binary '{}' found in PATH", bin_name);
             Ok(())
         } else {
@@ -241,8 +258,8 @@ impl IntoLua for Utils {
             let cmd_args: Vec<String> = args_iter.collect();
 
             Ok(Utils::sh(&cmd, &cmd_args)
-                .map(|(stdout, status)| (Some(stdout), status))
-                .unwrap_or((None, -1)))
+                .map(|out| (Some(out.stdout), Some(out.stderr), out.status))
+                .unwrap_or((None, None, -1)))
         })?;
         utils_table.set("sh", sh)?;
 
@@ -256,7 +273,7 @@ impl IntoLua for Utils {
             let cmd_args: Vec<String> = args_iter.collect();
 
             Utils::sh(&cmd, &cmd_args)
-                .map(|(stdout, status)| (Some(stdout), status))
+                .map(|out| (Some(out.stdout), Some(out.stderr), out.status))
                 .map_err(LuaError::external)
         })?;
         utils_table.set("sh!", sh_strict)?;
@@ -352,24 +369,36 @@ mod tests {
 
         lua.globals().set("utils", utils_table).unwrap();
 
-        let result: (Option<String>, i32) = lua
+        let result: (Option<String>, Option<String>, i32) = lua
             .load(r#"return utils.sh("echo", "hello", "world")"#)
             .eval()
             .unwrap();
 
         assert_eq!(result.0.unwrap().trim(), "hello world");
-        assert_eq!(result.1, 0);
+        assert_eq!(result.1.unwrap(), "");
+        assert_eq!(result.2, 0);
 
-        let result: (Option<String>, i32) = lua.load(r#"return utils.sh("false")"#).eval().unwrap();
+        // stderr arrives on its own, not folded into stdout.
+        let result: (Option<String>, Option<String>, i32) = lua
+            .load(r#"return utils.sh("sh", "-c", "echo oops >&2")"#)
+            .eval()
+            .unwrap();
 
-        assert_eq!(result.1, 1);
+        assert_eq!(result.0.unwrap(), "");
+        assert_eq!(result.1.unwrap().trim(), "oops");
+        assert_eq!(result.2, 0);
 
-        let result: (Option<String>, i32) = lua
+        let result: (Option<String>, Option<String>, i32) =
+            lua.load(r#"return utils.sh("false")"#).eval().unwrap();
+
+        assert_eq!(result.2, 1);
+
+        let result: (Option<String>, Option<String>, i32) = lua
             .load(r#"return utils["sh!"]("sh", "-c", "exit 42")"#)
             .eval()
             .unwrap();
 
-        assert_eq!(result.1, 42);
+        assert_eq!(result.2, 42);
     }
 
     #[test]
@@ -382,7 +411,7 @@ mod tests {
 
         let result = lua
             .load(r#"return utils.sh()"#)
-            .eval::<(Option<String>, i32)>();
+            .eval::<(Option<String>, Option<String>, i32)>();
         assert!(result.is_err());
 
         let error = result.unwrap_err();
@@ -391,7 +420,7 @@ mod tests {
         // `sh!` shares the argument check but propagates instead of returning nil.
         let result = lua
             .load(r#"return utils["sh!"]()"#)
-            .eval::<(Option<String>, i32)>();
+            .eval::<(Option<String>, Option<String>, i32)>();
         assert!(result.is_err());
     }
 
@@ -457,12 +486,13 @@ mod tests {
 
         // A missing binary fails to spawn, which is distinct from running and
         // exiting non-zero: `sh` reports nil and the -1 sentinel.
-        let (stdout, exit_code): (Option<String>, i32) = lua
+        let (stdout, stderr, exit_code): (Option<String>, Option<String>, i32) = lua
             .load(r#"return utils.sh("frork-does-not-exist")"#)
             .eval()
             .unwrap();
 
         assert_eq!(stdout, None);
+        assert_eq!(stderr, None);
         assert_eq!(exit_code, -1);
     }
 
@@ -493,10 +523,10 @@ mod tests {
             .finish();
 
         tracing::subscriber::with_default(subscriber, || {
-            let (stdout, status) =
+            let output =
                 Utils::sh_with_envs("sh", &["-c", "echo $LOGGED"], &[("LOGGED", "value")]).unwrap();
-            assert_eq!(stdout.trim(), "value");
-            assert_eq!(status, 0);
+            assert_eq!(output.stdout.trim(), "value");
+            assert_eq!(output.status, 0);
         });
     }
 }
