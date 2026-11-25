@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use miette::Result;
 use mlua::prelude::*;
 
 use crate::assertions::Assertion;
@@ -28,10 +27,9 @@ impl Providers {
         self.lua_providers.insert(name.to_string(), lua_provider);
     }
 
-    pub fn get_factory(&self, name: &str) -> Result<Box<dyn ProviderFactory>> {
+    pub fn get_factory(&self, name: &str) -> Result<Box<dyn ProviderFactory>, FrorkError> {
         if let Some(lua_provider) = self.lua_providers.get(name) {
             return Ok(Box::new(LuaAssertionFactory {
-                name: name.to_string(),
                 lua_provider: lua_provider.clone(),
             }));
         }
@@ -45,21 +43,24 @@ impl Providers {
             "symlink" => Ok(Box::new(TypedFactory::<Symlink>::new())),
             _ => Err(FrorkError::UnknownProvider {
                 name: name.to_string(),
-            }
-            .into()),
+            }),
         }
     }
 }
 
 struct LuaAssertionFactory {
-    name: String,
     lua_provider: LuaProvider,
 }
 
 impl ProviderFactory for LuaAssertionFactory {
-    fn build(&self, _lua: &Lua, args: LuaMultiValue) -> Result<Box<dyn Assertion>> {
+    fn build(
+        &self,
+        name: &str,
+        _lua: &Lua,
+        args: LuaMultiValue,
+    ) -> Result<Box<dyn Assertion>, FrorkError> {
         Ok(Box::new(LuaAssertion::new(
-            &self.name,
+            name,
             args,
             self.lua_provider.clone(),
         )))
@@ -117,7 +118,7 @@ mod tests {
         for (name, args, expected) in cases {
             let factory = providers.get_factory(name);
             let factory = factory.unwrap_or_else(|e| panic!("{name} did not resolve: {e}"));
-            let assertion = factory.build(&lua, args);
+            let assertion = factory.build(name, &lua, args);
             let assertion = assertion.unwrap_or_else(|e| panic!("{name} failed to build: {e}"));
             assert_eq!(assertion.to_string(), expected, "for type {name}");
         }
@@ -131,7 +132,7 @@ mod tests {
 
         let factory = providers.get_factory("custom").unwrap();
         let assertion = factory
-            .build(&lua, lua.load(r#"return "arg""#).eval().unwrap())
+            .build("custom", &lua, lua.load(r#"return "arg""#).eval().unwrap())
             .unwrap();
 
         assert_eq!(assertion.to_string(), "custom arg");
@@ -156,7 +157,7 @@ mod tests {
         providers.provide("custom", LuaProvider::from_lua(replacement, &lua).unwrap());
 
         let factory = providers.get_factory("custom").unwrap();
-        let assertion = factory.build(&lua, LuaMultiValue::new()).unwrap();
+        let assertion = factory.build("custom", &lua, LuaMultiValue::new()).unwrap();
         assert_eq!(assertion.to_string(), "replaced");
     }
 }

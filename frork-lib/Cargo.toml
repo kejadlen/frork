@@ -9,7 +9,9 @@ edition = "2024"
 [dependencies]
 miette = "*"
 fs-err = "*"
-mlua = { version = "*", features = ["lua54", "serde"] }
+# error-send keeps mlua::Error Send + Sync, which FrorkError needs to
+# stay convertible into a miette::Report at the binary boundary.
+mlua = { version = "*", features = ["lua54", "serde", "error-send"] }
 regex = "*"
 serde = { version = "*", features = ["derive"] }
 thiserror = "*"

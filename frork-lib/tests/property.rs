@@ -130,19 +130,19 @@ impl std::fmt::Display for Named {
 }
 
 impl Assertion for Named {
-    fn status(&self) -> miette::Result<Status> {
+    fn status(&self) -> Result<Status, FrorkError> {
         Ok(Status::Present)
     }
 
-    fn create(&self) -> miette::Result<()> {
+    fn create(&self) -> Result<(), FrorkError> {
         Ok(())
     }
 
-    fn update(&self) -> miette::Result<()> {
+    fn update(&self) -> Result<(), FrorkError> {
         Ok(())
     }
 
-    fn remove(&self) -> miette::Result<()> {
+    fn remove(&self) -> Result<(), FrorkError> {
         Ok(())
     }
 }
@@ -567,7 +567,7 @@ fn providers_prefer_a_provided_type_under_any_name(tc: TestCase) {
     );
 
     let factory = providers.get_factory(&name).unwrap();
-    let assertion = factory.build(&lua, LuaMultiValue::new()).unwrap();
+    let assertion = factory.build(&name, &lua, LuaMultiValue::new()).unwrap();
     assert_eq!(assertion.to_string(), "provided");
 }
 
@@ -576,11 +576,15 @@ fn providers_prefer_a_provided_type_under_any_name(tc: TestCase) {
 fn frork_error(tc: &TestCase) -> FrorkError {
     let detail = tc.draw(text());
     match tc.draw(gs::integers::<u8>().max_value(4)) {
-        0 => FrorkError::NoOperation,
+        0 => FrorkError::MissingAssertionType {
+            declaration: Declaration::Ok,
+        },
         1 => FrorkError::UnknownProvider { name: detail },
         2 => FrorkError::InvalidArguments(detail),
-        3 => FrorkError::MissingProvider,
-        _ => FrorkError::Lua(detail),
+        3 => FrorkError::MissingAssertionType {
+            declaration: Declaration::No,
+        },
+        _ => FrorkError::Lua(LuaError::RuntimeError(detail)),
     }
 }
 
@@ -596,7 +600,10 @@ fn frork_error_survives_a_rust_callback(tc: TestCase) {
     let lua = Lua::new();
 
     let caught = raising(&lua, &error).call::<()>(()).unwrap_err();
-    assert_eq!(FrorkError::from(caught), error);
+    assert_eq!(
+        format!("{:?}", FrorkError::from(caught)),
+        format!("{error:?}")
+    );
 }
 
 #[hegel::test]
@@ -606,7 +613,10 @@ fn frork_error_survives_a_lua_caller(tc: TestCase) {
     let caller: LuaFunction = lua.load("return function(f) f() end").eval().unwrap();
 
     let caught = caller.call::<()>(raising(&lua, &error)).unwrap_err();
-    assert_eq!(FrorkError::from(caught), error);
+    assert_eq!(
+        format!("{:?}", FrorkError::from(caught)),
+        format!("{error:?}")
+    );
 }
 
 // --- Filesystem assertions ---

@@ -1,7 +1,4 @@
 use fs_err as fs;
-use miette::IntoDiagnostic as _;
-use miette::Result;
-use miette::miette;
 use mlua::prelude::*;
 use serde::Deserialize;
 use std::path::Path;
@@ -17,10 +14,10 @@ use crate::utils::ExpandedPath;
 use crate::utils::Utils;
 
 pub trait Assertion: std::fmt::Display {
-    fn status(&self) -> Result<Status>;
-    fn create(&self) -> Result<()>;
-    fn update(&self) -> Result<()>;
-    fn remove(&self) -> Result<()>;
+    fn status(&self) -> Result<Status, FrorkError>;
+    fn create(&self) -> Result<(), FrorkError>;
+    fn update(&self) -> Result<(), FrorkError>;
+    fn remove(&self) -> Result<(), FrorkError>;
 }
 
 #[derive(Debug)]
@@ -78,7 +75,12 @@ impl FromLua for Drift {
 }
 
 pub trait ProviderFactory {
-    fn build(&self, lua: &Lua, args: LuaMultiValue) -> Result<Box<dyn Assertion>>;
+    fn build(
+        &self,
+        name: &str,
+        lua: &Lua,
+        args: LuaMultiValue,
+    ) -> Result<Box<dyn Assertion>, FrorkError>;
 }
 
 pub struct TypedFactory<T>(std::marker::PhantomData<T>);
@@ -99,10 +101,18 @@ impl<T> ProviderFactory for TypedFactory<T>
 where
     T: Assertion + FromLuaMulti + 'static,
 {
-    fn build(&self, lua: &Lua, args: LuaMultiValue) -> Result<Box<dyn Assertion>> {
+    fn build(
+        &self,
+        name: &str,
+        lua: &Lua,
+        args: LuaMultiValue,
+    ) -> Result<Box<dyn Assertion>, FrorkError> {
         T::from_lua_multi(args, lua)
             .map(|t| Box::new(t) as Box<dyn Assertion>)
-            .map_err(|e| miette!("Failed to create assertion: {e}"))
+            .map_err(|source| FrorkError::AssertionBuild {
+                provider: name.to_string(),
+                source,
+            })
     }
 }
 
@@ -136,7 +146,7 @@ impl std::fmt::Display for Symlink {
 }
 
 impl Assertion for Symlink {
-    fn status(&self) -> Result<Status> {
+    fn status(&self) -> Result<Status, FrorkError> {
         // Unlike `Path::exists`, this doesn't follow the link, so a link to a
         // source that doesn't exist yet still counts as present.
         if fs::symlink_metadata(&self.target).is_err() {
@@ -160,30 +170,29 @@ impl Assertion for Symlink {
         }
     }
 
-    fn create(&self) -> Result<()> {
-        use std::os::unix::fs;
+    fn create(&self) -> Result<(), FrorkError> {
         // Scripts may create the source after the link, so a dangling link
         // is allowed, but it's more often a typo than intended.
         if !self.resolved_source().exists() {
             warn!("{self}: source does not exist, linking anyway");
         }
-        fs::symlink(&self.source, &self.target)
-            .map_err(|e| miette!("Failed to create symlink: {e}"))?;
+        // fs_err's symlink wraps the io error with both paths.
+        fs::os::unix::fs::symlink(&self.source, &self.target)?;
         debug!("created: {}", self);
         Ok(())
     }
 
     // cov-excl-start
-    fn update(&self) -> Result<()> {
+    fn update(&self) -> Result<(), FrorkError> {
         todo!()
     }
     // cov-excl-stop
 
-    fn remove(&self) -> Result<()> {
+    fn remove(&self) -> Result<(), FrorkError> {
         match self.status()? {
             Status::Absent => Ok(()),
             Status::Present => {
-                fs::remove_file(&self.target).into_diagnostic()?;
+                fs::remove_file(&self.target)?;
                 debug!("removed: {}", self);
                 Ok(())
             }
@@ -192,12 +201,11 @@ impl Assertion for Symlink {
     }
 }
 
-fn refuse(path: &ExpandedPath, found: impl Into<String>) -> miette::Report {
+fn refuse(path: &ExpandedPath, found: impl Into<String>) -> FrorkError {
     FrorkError::RemoveRefused {
         path: path.to_string(),
         found: found.into(),
     }
-    .into()
 }
 
 pub struct Directory {
@@ -218,7 +226,7 @@ impl std::fmt::Display for Directory {
 }
 
 impl Assertion for Directory {
-    fn status(&self) -> Result<Status> {
+    fn status(&self) -> Result<Status, FrorkError> {
         let path = Path::new(&self.path);
         if path.is_dir() {
             return Ok(Status::Present);
@@ -235,32 +243,32 @@ impl Assertion for Directory {
         }))
     }
 
-    fn create(&self) -> Result<()> {
-        fs::create_dir_all(&self.path).into_diagnostic()?;
+    fn create(&self) -> Result<(), FrorkError> {
+        fs::create_dir_all(&self.path)?;
         debug!("created: {}", self);
         Ok(())
     }
 
     // cov-excl-start
-    fn update(&self) -> Result<()> {
+    fn update(&self) -> Result<(), FrorkError> {
         todo!()
     }
     // cov-excl-stop
 
     /// Removes only an empty directory: the assertion is that the directory
     /// exists, so its contents belong to someone else.
-    fn remove(&self) -> Result<()> {
+    fn remove(&self) -> Result<(), FrorkError> {
         let Ok(metadata) = fs::symlink_metadata(&self.path) else {
             return Ok(());
         };
         if !metadata.is_dir() {
             return Err(refuse(&self.path, file_kind(metadata.file_type())));
         }
-        let mut entries = fs::read_dir(&self.path).into_diagnostic()?;
+        let mut entries = fs::read_dir(&self.path)?;
         if entries.next().is_some() {
             return Err(refuse(&self.path, "a non-empty directory"));
         }
-        fs::remove_dir(&self.path).into_diagnostic()?;
+        fs::remove_dir(&self.path)?;
         debug!("removed: {}", self);
         Ok(())
     }
@@ -304,7 +312,7 @@ impl std::fmt::Display for Git {
 }
 
 impl Assertion for Git {
-    fn status(&self) -> Result<Status> {
+    fn status(&self) -> Result<Status, FrorkError> {
         Utils::assert_bin("git")?;
 
         let dir_path = Path::new(&self.dir);
@@ -322,7 +330,7 @@ impl Assertion for Git {
 
         // An empty directory can still be cloned into, so it reads as
         // not-yet-cloned.
-        let mut entries = fs::read_dir(dir_path).into_diagnostic()?;
+        let mut entries = fs::read_dir(dir_path)?;
         if entries.next().is_none() {
             return Ok(Status::Absent);
         }
@@ -354,16 +362,15 @@ impl Assertion for Git {
         }
     }
 
-    fn create(&self) -> Result<()> {
+    fn create(&self) -> Result<(), FrorkError> {
         Utils::assert_bin("git")?;
 
         let output = Utils::sh("git", &["clone", &self.remote_url, &self.dir])?;
 
         if output.status != 0 {
-            return Err(miette!(
-                "Failed to clone git repository: {}",
-                output.stderr.trim()
-            ));
+            return Err(FrorkError::GitClone {
+                stderr: output.stderr.trim().to_string(),
+            });
         }
 
         debug!("created: {}", self);
@@ -371,7 +378,7 @@ impl Assertion for Git {
     }
 
     // cov-excl-start
-    fn update(&self) -> Result<()> {
+    fn update(&self) -> Result<(), FrorkError> {
         todo!()
     }
     // cov-excl-stop
@@ -379,7 +386,7 @@ impl Assertion for Git {
     /// Removes the clone only when it is a repo with the declared remote and
     /// nothing a remote lacks. An empty directory reads as absent and stays
     /// put; ignored files don't count as unsaved work.
-    fn remove(&self) -> Result<()> {
+    fn remove(&self) -> Result<(), FrorkError> {
         // `status` follows links, so a linked clone would read as present.
         let is_link = fs::symlink_metadata(&self.dir).is_ok_and(|m| m.is_symlink());
         if is_link {
@@ -392,10 +399,9 @@ impl Assertion for Git {
                     return Err(FrorkError::RemoveUnsaved {
                         path: self.dir.to_string(),
                         found: found.to_string(),
-                    }
-                    .into());
+                    });
                 }
-                fs::remove_dir_all(&self.dir).into_diagnostic()?;
+                fs::remove_dir_all(&self.dir)?;
                 debug!("removed: {}", self);
                 Ok(())
             }
@@ -406,7 +412,7 @@ impl Assertion for Git {
 
 impl Git {
     /// Names the first kind of work in the clone that no remote has.
-    fn unsaved_work(&self) -> Result<Option<&'static str>> {
+    fn unsaved_work(&self) -> Result<Option<&'static str>, FrorkError> {
         // Explicit, so a `status.showUntrackedFiles=no` config can't hide files.
         let changes = self.git(&["status", "--porcelain", "--untracked-files=all"])?;
         if !changes.is_empty() {
@@ -420,16 +426,15 @@ impl Git {
         Ok(None)
     }
 
-    fn git(&self, args: &[&str]) -> Result<String> {
+    fn git(&self, args: &[&str]) -> Result<String, FrorkError> {
         let in_dir = [&["-C", self.dir.as_str()], args].concat();
         let output = Utils::sh("git", &in_dir)?;
         if output.status != 0 {
-            return Err(miette!(
-                "`git {}` failed in {}: {}",
-                args.join(" "),
-                self.dir,
-                output.stderr.trim()
-            ));
+            return Err(FrorkError::GitCommand {
+                args: args.join(" "),
+                dir: self.dir.to_string(),
+                stderr: output.stderr.trim().to_string(),
+            });
         }
         Ok(output.stdout)
     }
@@ -440,19 +445,21 @@ impl Git {
 /// only tests substitute anything else.
 pub trait CommandRunner {
     fn has_bin(&self, bin: &str) -> bool;
-    fn run(&self, cmd: &str, args: &[&str]) -> Result<CommandOutput>;
+    fn run(&self, cmd: &str, args: &[&str]) -> Result<CommandOutput, FrorkError>;
     fn run_with_envs(
         &self,
         cmd: &str,
         args: &[&str],
         envs: &[(&str, &str)],
-    ) -> Result<CommandOutput>;
+    ) -> Result<CommandOutput, FrorkError>;
 
-    fn require_bin(&self, bin: &str) -> Result<()> {
+    fn require_bin(&self, bin: &str) -> Result<(), FrorkError> {
         if self.has_bin(bin) {
             Ok(())
         } else {
-            Err(miette!("Required binary '{bin}' not found in PATH"))
+            Err(FrorkError::MissingBinary {
+                bin: bin.to_string(),
+            })
         }
     }
 }
@@ -464,7 +471,7 @@ impl CommandRunner for SystemRunner {
         Utils::assert_bin(bin).is_ok()
     }
 
-    fn run(&self, cmd: &str, args: &[&str]) -> Result<CommandOutput> {
+    fn run(&self, cmd: &str, args: &[&str]) -> Result<CommandOutput, FrorkError> {
         Utils::sh(cmd, args)
     }
 
@@ -473,7 +480,7 @@ impl CommandRunner for SystemRunner {
         cmd: &str,
         args: &[&str],
         envs: &[(&str, &str)],
-    ) -> Result<CommandOutput> {
+    ) -> Result<CommandOutput, FrorkError> {
         Utils::sh_with_envs(cmd, args, envs)
     }
 }
@@ -499,7 +506,7 @@ impl<R> std::fmt::Display for Brew<R> {
 }
 
 impl<R: CommandRunner> Assertion for Brew<R> {
-    fn status(&self) -> Result<Status> {
+    fn status(&self) -> Result<Status, FrorkError> {
         if !self.runner.has_bin("brew") {
             return Ok(Status::Absent);
         }
@@ -513,7 +520,7 @@ impl<R: CommandRunner> Assertion for Brew<R> {
     }
 
     // This needs sudo — figure out how to make this work through frork.
-    fn create(&self) -> Result<()> {
+    fn create(&self) -> Result<(), FrorkError> {
         let install_args = [
             "-c",
             r#"/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)""#,
@@ -521,10 +528,9 @@ impl<R: CommandRunner> Assertion for Brew<R> {
         let output = self.runner.run("bash", &install_args)?;
 
         if output.status != 0 {
-            return Err(miette!(
-                "Failed to install Homebrew: {}",
-                output.stderr.trim()
-            ));
+            return Err(FrorkError::HomebrewInstall {
+                stderr: output.stderr.trim().to_string(),
+            });
         }
 
         debug!("created: {}", self);
@@ -532,21 +538,20 @@ impl<R: CommandRunner> Assertion for Brew<R> {
     }
 
     // cov-excl-start
-    fn update(&self) -> Result<()> {
+    fn update(&self) -> Result<(), FrorkError> {
         todo!()
     }
     // cov-excl-stop
 
-    fn remove(&self) -> Result<()> {
+    fn remove(&self) -> Result<(), FrorkError> {
         Err(remove_unsupported(self))
     }
 }
 
-fn remove_unsupported(provider: &impl std::fmt::Display) -> miette::Report {
+fn remove_unsupported(provider: &impl std::fmt::Display) -> FrorkError {
     FrorkError::RemoveUnsupported {
         provider: provider.to_string(),
     }
-    .into()
 }
 
 pub struct BrewBundle<R = SystemRunner> {
@@ -574,12 +579,12 @@ impl<R> std::fmt::Display for BrewBundle<R> {
 
 impl<R: CommandRunner> Assertion for BrewBundle<R> {
     #[cfg(not(target_os = "macos"))]
-    fn status(&self) -> Result<Status> {
-        Err(miette!("brew-bundle only supported on Darwin/macOS"))
+    fn status(&self) -> Result<Status, FrorkError> {
+        Err(FrorkError::MacOsOnly)
     }
 
     #[cfg(target_os = "macos")]
-    fn status(&self) -> Result<Status> {
+    fn status(&self) -> Result<Status, FrorkError> {
         self.runner.require_bin("brew")?;
 
         let file_arg = format!("--file={}", self.brewfile);
@@ -610,12 +615,12 @@ impl<R: CommandRunner> Assertion for BrewBundle<R> {
     }
 
     #[cfg(not(target_os = "macos"))]
-    fn create(&self) -> Result<()> {
-        Err(miette!("brew-bundle only supported on Darwin/macOS"))
+    fn create(&self) -> Result<(), FrorkError> {
+        Err(FrorkError::MacOsOnly)
     }
 
     #[cfg(target_os = "macos")]
-    fn create(&self) -> Result<()> {
+    fn create(&self) -> Result<(), FrorkError> {
         self.runner.require_bin("brew")?;
 
         let file_arg = format!("--file={}", self.brewfile);
@@ -624,10 +629,9 @@ impl<R: CommandRunner> Assertion for BrewBundle<R> {
             .run("brew", &["bundle", "install", file_arg.as_str()])?;
 
         if output.status != 0 {
-            return Err(miette!(
-                "Failed to install brew bundle: {}",
-                output.stderr.trim()
-            ));
+            return Err(FrorkError::BrewBundleInstall {
+                stderr: output.stderr.trim().to_string(),
+            });
         }
 
         debug!("created: {}", self);
@@ -635,12 +639,12 @@ impl<R: CommandRunner> Assertion for BrewBundle<R> {
     }
 
     // cov-excl-start
-    fn update(&self) -> Result<()> {
+    fn update(&self) -> Result<(), FrorkError> {
         todo!()
     }
     // cov-excl-stop
 
-    fn remove(&self) -> Result<()> {
+    fn remove(&self) -> Result<(), FrorkError> {
         Err(remove_unsupported(self))
     }
 }
@@ -672,45 +676,61 @@ impl std::fmt::Display for Debug {
 }
 
 impl Assertion for Debug {
-    fn status(&self) -> Result<Status> {
+    fn status(&self) -> Result<Status, FrorkError> {
         if let Some(ref status_fn) = self.status_fn {
             let result = status_fn
                 .call::<Status>(LuaMultiValue::new())
-                .map_err(|e| miette!("Debug status function failed: {e}"))?;
+                .map_err(|source| FrorkError::DebugHook {
+                    hook: "status",
+                    source,
+                })?;
             Ok(result)
         } else {
             Ok(Status::Present)
         }
     }
 
-    fn create(&self) -> Result<()> {
+    fn create(&self) -> Result<(), FrorkError> {
         info!("debug: creating");
         let create_fn = self
             .create_fn
             .as_ref()
-            .ok_or_else(|| miette!("Create not implemented for debug assertion"))?;
+            .ok_or_else(|| missing_hook("create", "debug"))?;
         create_fn
             .call::<()>(LuaMultiValue::new())
-            .map_err(|e| miette!("Debug create function failed: {e}"))?;
+            .map_err(|source| FrorkError::DebugHook {
+                hook: "create",
+                source,
+            })?;
         Ok(())
     }
 
     // cov-excl-start
-    fn update(&self) -> Result<()> {
+    fn update(&self) -> Result<(), FrorkError> {
         todo!()
     }
     // cov-excl-stop
 
-    fn remove(&self) -> Result<()> {
+    fn remove(&self) -> Result<(), FrorkError> {
         info!("debug: removing");
         let remove_fn = self
             .remove_fn
             .as_ref()
-            .ok_or_else(|| miette!("Remove not implemented for debug assertion"))?;
+            .ok_or_else(|| missing_hook("remove", "debug"))?;
         remove_fn
             .call::<()>(LuaMultiValue::new())
-            .map_err(|e| miette!("Debug remove function failed: {e}"))?;
+            .map_err(|source| FrorkError::DebugHook {
+                hook: "remove",
+                source,
+            })?;
         Ok(())
+    }
+}
+
+fn missing_hook(hook: &'static str, provider: &str) -> FrorkError {
+    FrorkError::MissingHook {
+        hook,
+        provider: provider.to_string(),
     }
 }
 
@@ -789,7 +809,7 @@ impl std::fmt::Display for LuaAssertion {
 }
 
 impl Assertion for LuaAssertion {
-    fn status(&self) -> Result<Status> {
+    fn status(&self) -> Result<Status, FrorkError> {
         let result = self
             .provider
             .status_fn
@@ -798,7 +818,7 @@ impl Assertion for LuaAssertion {
         Ok(result)
     }
 
-    fn create(&self) -> Result<()> {
+    fn create(&self) -> Result<(), FrorkError> {
         self.provider
             .create_fn
             .call::<()>(self.args.clone())
@@ -807,7 +827,7 @@ impl Assertion for LuaAssertion {
         Ok(())
     }
 
-    fn update(&self) -> Result<()> {
+    fn update(&self) -> Result<(), FrorkError> {
         // A missing update function falls back to create — re-running the
         // create is the default way to bring a drifted assertion in line.
         if let Some(update_fn) = self.provider.update_fn.as_ref() {
@@ -821,12 +841,12 @@ impl Assertion for LuaAssertion {
         Ok(())
     }
 
-    fn remove(&self) -> Result<()> {
+    fn remove(&self) -> Result<(), FrorkError> {
         let remove_fn = self
             .provider
             .remove_fn
             .as_ref()
-            .ok_or_else(|| miette!("Remove not implemented for provider '{}'", self.name))?;
+            .ok_or_else(|| missing_hook("remove", &self.name))?;
         remove_fn
             .call::<()>(self.args.clone())
             .map_err(FrorkError::from)?;
@@ -892,7 +912,7 @@ mod tests {
         let factory: TypedFactory<Directory> = TypedFactory::default();
 
         let assertion = factory
-            .build(&lua, multi(&lua, r#"return "/tmp""#))
+            .build("directory", &lua, multi(&lua, r#"return "/tmp""#))
             .unwrap();
         assert_eq!(assertion.to_string(), "directory /tmp");
     }
@@ -903,10 +923,14 @@ mod tests {
         let factory: TypedFactory<Directory> = TypedFactory::new();
 
         // Box<dyn Assertion> is not Debug, so unwrap_err is unavailable.
-        let Err(error) = factory.build(&lua, multi(&lua, r#"return true"#)) else {
+        let Err(error) = factory.build("directory", &lua, multi(&lua, r#"return true"#)) else {
             panic!("expected a conversion failure"); // cov-excl-line
         };
-        assert!(error.to_string().contains("Failed to create assertion"));
+        let message = error.to_string();
+        assert!(message.contains("Failed to create the directory assertion"));
+        // The conversion failure itself is the source, not part of the message.
+        use std::error::Error as _;
+        assert!(error.source().is_some());
     }
 
     // --- Symlink ---
@@ -957,7 +981,9 @@ mod tests {
         };
 
         let error = symlink.create().unwrap_err();
-        assert!(error.to_string().contains("Failed to create symlink"));
+        // fs-err's symlink wrapper names both paths in the io error.
+        let message = error.to_string();
+        assert!(message.contains("failed to symlink file"), "{message}");
     }
 
     /// Runs `f` under a subscriber that records WARN and above, and returns
@@ -1012,17 +1038,19 @@ mod tests {
     }
 
     /// Asserts `error` is the refusal for `path`, with a help line.
-    fn assert_refused(error: miette::Report, path: &Path, found: &str) {
+    fn assert_refused(error: FrorkError, path: &Path, found: &str) {
         use miette::Diagnostic as _;
-        let frork_error = error.downcast_ref::<FrorkError>().unwrap();
-        assert_eq!(
-            frork_error,
-            &FrorkError::RemoveRefused {
-                path: path.display().to_string(),
-                found: found.to_string(),
-            }
-        );
-        assert!(frork_error.help().is_some());
+        let FrorkError::RemoveRefused {
+            path: refused_path,
+            found: refused_found,
+        } = &error
+        else {
+            panic!("expected a refusal"); // cov-excl-line
+        };
+        assert_eq!(refused_path.as_str(), path.display().to_string());
+        assert_eq!(refused_found.as_str(), found);
+        // A refusal without its help line is a dead end for the user.
+        assert!(error.help().is_some());
     }
 
     #[test]
@@ -1335,15 +1363,16 @@ mod tests {
     fn assert_unsaved(git: &Git, clone: &Path, found: &str) {
         use miette::Diagnostic as _;
         let error = git.remove().unwrap_err();
-        let frork_error = error.downcast_ref::<FrorkError>().unwrap();
-        assert_eq!(
-            frork_error,
-            &FrorkError::RemoveUnsaved {
-                path: clone.display().to_string(),
-                found: found.to_string(),
-            }
-        );
-        assert!(frork_error.help().is_some());
+        let FrorkError::RemoveUnsaved {
+            path: unsaved_path,
+            found: unsaved_found,
+        } = &error
+        else {
+            panic!("expected unsaved work"); // cov-excl-line
+        };
+        assert_eq!(unsaved_path.as_str(), clone.display().to_string());
+        assert_eq!(unsaved_found.as_str(), found);
+        assert!(error.help().is_some());
         assert!(clone.join(".git").is_dir());
     }
 
@@ -1511,7 +1540,7 @@ mod tests {
             !self.missing_bins.contains(&bin)
         }
 
-        fn run(&self, cmd: &str, args: &[&str]) -> Result<CommandOutput> {
+        fn run(&self, cmd: &str, args: &[&str]) -> Result<CommandOutput, FrorkError> {
             self.run_with_envs(cmd, args, &[])
         }
 
@@ -1520,7 +1549,7 @@ mod tests {
             cmd: &str,
             args: &[&str],
             _envs: &[(&str, &str)],
-        ) -> Result<CommandOutput> {
+        ) -> Result<CommandOutput, FrorkError> {
             self.calls
                 .borrow_mut()
                 .push(format!("{cmd} {}", args.join(" ")));
@@ -1614,16 +1643,13 @@ mod tests {
         assert!(message.contains("stderr of bash"), "{message}");
     }
 
-    fn assert_remove_unsupported(error: miette::Report, provider: &str) {
+    fn assert_remove_unsupported(error: FrorkError, provider: &str) {
         use miette::Diagnostic as _;
-        let frork_error = error.downcast_ref::<FrorkError>().unwrap();
-        assert_eq!(
-            frork_error,
-            &FrorkError::RemoveUnsupported {
-                provider: provider.to_string(),
-            }
-        );
-        assert!(frork_error.help().is_some());
+        let FrorkError::RemoveUnsupported { provider: named } = &error else {
+            panic!("expected removal to be unsupported"); // cov-excl-line
+        };
+        assert_eq!(named.as_str(), provider);
+        assert!(error.help().is_some());
     }
 
     #[test]
@@ -1738,17 +1764,15 @@ mod tests {
         assert!(matches!(debug.status().unwrap(), Status::Present));
 
         let error = debug.create().unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("Create not implemented for debug assertion")
+        assert_eq!(
+            error.to_string(),
+            "create not implemented for provider 'debug'"
         );
 
         let error = debug.remove().unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("Remove not implemented for debug assertion")
+        assert_eq!(
+            error.to_string(),
+            "remove not implemented for provider 'debug'"
         );
     }
 
@@ -1792,14 +1816,25 @@ mod tests {
         .unwrap();
 
         let error = debug.status().unwrap_err();
-        assert!(error.to_string().contains("Debug status function failed"));
+        assert_hook_failure(&error, "status");
 
         let error = debug.create().unwrap_err();
-        assert!(error.to_string().contains("Debug create function failed"));
+        assert_hook_failure(&error, "create");
 
         let error = debug.remove().unwrap_err();
-        assert!(error.to_string().contains("Debug remove function failed"));
-        assert!(error.to_string().contains("remove boom"));
+        assert_hook_failure(&error, "remove");
+    }
+
+    /// The hook's failure names the hook; the Lua error it raised rides
+    /// along as the source rather than being flattened into the message.
+    fn assert_hook_failure(error: &FrorkError, hook: &str) {
+        use std::error::Error as _;
+        assert_eq!(error.to_string(), format!("Debug {hook} function failed"));
+        let source = error.source().expect("the Lua failure is the source");
+        assert!(
+            source.to_string().contains(&format!("{hook} boom")),
+            "{source}"
+        );
     }
 
     #[test]
@@ -1996,7 +2031,7 @@ mod tests {
         let error = assertion.remove().unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Remove not implemented for provider 'custom'"
+            "remove not implemented for provider 'custom'"
         );
     }
 

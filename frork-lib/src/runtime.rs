@@ -1,8 +1,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use miette::Result;
-use miette::miette;
 use mlua::prelude::*;
 use tracing::info;
 
@@ -32,56 +30,61 @@ impl std::fmt::Display for Declaration {
 
 /// Handles each assertion's status once it has been evaluated. The binary
 /// supplies the rendering and any prompting; nothing here writes to stdout.
+/// It returns a `miette::Result` because its errors are the binary's —
+/// printing and prompting — not the library's.
 pub trait StatusHandler:
-    Fn(Declaration, &Status, &dyn Assertion) -> Result<()> + Clone + 'static
+    Fn(Declaration, &Status, &dyn Assertion) -> miette::Result<()> + Clone + 'static
 {
 }
 
 impl<T> StatusHandler for T where
-    T: Fn(Declaration, &Status, &dyn Assertion) -> Result<()> + Clone + 'static
+    T: Fn(Declaration, &Status, &dyn Assertion) -> miette::Result<()> + Clone + 'static
 {
 }
 
+/// Wraps a call into the Lua bridge so a failure names the step that broke.
+fn bridge<T>(step: &'static str, result: LuaResult<T>) -> Result<T, FrorkError> {
+    result.map_err(|source| FrorkError::LuaBridge { step, source })
+}
+
 /// Evaluates inline Fennel code.
-pub fn run_code(code: &str, handle_status: impl StatusHandler) -> Result<()> {
+pub fn run_code(code: &str, handle_status: impl StatusHandler) -> Result<(), FrorkError> {
     let (lua, frork_module, fennel_module) = setup_lua(handle_status)?;
 
-    let ok_fn: LuaResult<LuaFunction> = frork_module.get("ok");
-    let ok_fn = ok_fn.map_err(|e| miette!("Failed to get frork.ok: {e}"))?;
-    let set_ok = lua.globals().set("ok", ok_fn);
-    set_ok.map_err(|e| miette!("Failed to set ok global: {e}"))?;
+    let ok_fn: LuaFunction = bridge("get frork.ok", frork_module.get("ok"))?;
+    bridge("set ok global", lua.globals().set("ok", ok_fn))?;
 
-    let no_fn: LuaResult<LuaFunction> = frork_module.get("no");
-    let no_fn = no_fn.map_err(|e| miette!("Failed to get frork.no: {e}"))?;
-    let set_no = lua.globals().set("no", no_fn);
-    set_no.map_err(|e| miette!("Failed to set no global: {e}"))?;
+    let no_fn: LuaFunction = bridge("get frork.no", frork_module.get("no"))?;
+    bridge("set no global", lua.globals().set("no", no_fn))?;
 
-    let eval_fn: LuaResult<LuaFunction> = fennel_module.get("eval");
-    let eval_fn = eval_fn.map_err(|e| miette!("Failed to get fennel.eval: {e}"))?;
+    let eval_fn: LuaFunction = bridge("get fennel.eval", fennel_module.get("eval"))?;
 
-    eval_fn
-        .call::<()>(code)
-        .map_err(|e| miette!("Failed to execute fennel code: {e}"))?;
+    let result = eval_fn.call::<()>(code);
+    // Recover a declaration's FrorkError: mlua's callback layer would
+    // otherwise cut the source chain at the CallbackError.
+    result.map_err(|source| {
+        FrorkError::recover(&source).unwrap_or_else(|| FrorkError::ScriptEval(source))
+    })?;
 
     Ok(())
 }
 
 /// Evaluates a `.fnl` script file, with its directory on the search path.
-pub fn run_script(script: &str, handle_status: impl StatusHandler) -> Result<()> {
+pub fn run_script(script: &str, handle_status: impl StatusHandler) -> Result<(), FrorkError> {
     let (lua, _frork_module, fennel_module) = setup_lua(handle_status)?;
 
     if let Some(script_dir_str) = script_dir(script) {
         let package: LuaResult<LuaTable> = lua.globals().get("package");
-        let package_table = package.map_err(|e| miette!("Failed to get package table: {e}"))?;
+        let package_table: LuaTable = bridge("get package table", package)?;
 
         let path: LuaResult<String> = package_table.get("path");
-        let current_path = path.map_err(|e| miette!("Failed to get current Lua path: {e}"))?;
+        let current_path: String = bridge("get current Lua path", path)?;
         let new_path = format!(
             "{};{}/?.lua;{}/?/init.lua",
             current_path, script_dir_str, script_dir_str
         );
         let set_path = package_table.set("path", new_path);
-        set_path.map_err(|e| miette!("Failed to set Lua path: {e}"))?;
+        bridge("set Lua path", set_path)?;
 
         let fennel_path: LuaResult<String> = fennel_module.get("path");
         let current_fennel_path =
@@ -91,19 +94,24 @@ pub fn run_script(script: &str, handle_status: impl StatusHandler) -> Result<()>
             current_fennel_path, script_dir_str, script_dir_str
         );
         let fennel_set = fennel_module.set("path", new_fennel_path);
-        fennel_set.map_err(|e| miette!("Failed to set Fennel path: {e}"))?;
+        bridge("set Fennel path", fennel_set)?;
     }
 
     let install_fn: LuaResult<LuaFunction> = fennel_module.get("install");
-    let install_fn = install_fn.map_err(|e| miette!("Failed to get fennel.install: {e}"))?;
+    let install_fn: LuaFunction = bridge("get fennel.install", install_fn)?;
     let installed = install_fn.call::<()>(());
-    installed.map_err(|e| miette!("Failed to install the Fennel searcher: {e}"))?;
+    bridge("install the Fennel searcher", installed)?;
 
     let dofile_fn: LuaResult<LuaFunction> = fennel_module.get("dofile");
-    let dofile_fn = dofile_fn.map_err(|e| miette!("Failed to get fennel.dofile: {e}"))?;
-    dofile_fn
-        .call::<()>(script)
-        .map_err(|e| miette!("Failed to execute script: {e}"))?;
+    let dofile_fn: LuaFunction = bridge("get fennel.dofile", dofile_fn)?;
+    let result = dofile_fn.call::<()>(script);
+    // Same recovery as run_code, for the same reason.
+    result.map_err(|source| {
+        FrorkError::recover(&source).unwrap_or_else(|| FrorkError::ScriptRun {
+            script: script.to_string(),
+            source,
+        })
+    })?;
 
     Ok(())
 }
@@ -127,23 +135,23 @@ pub fn frork_module(lua: &Lua, handle_status: impl StatusHandler) -> LuaResult<L
     }
 }
 
-fn setup_lua(handle_status: impl StatusHandler) -> Result<(Lua, LuaTable, LuaTable)> {
+fn setup_lua(handle_status: impl StatusHandler) -> Result<(Lua, LuaTable, LuaTable), FrorkError> {
     let lua = Lua::new();
 
     let fennel_code = include_str!("../fennel-1.6.0.lua");
     let loaded = lua.load(fennel_code).eval();
-    let fennel_module: LuaTable = loaded.map_err(|e| miette!("Failed to load Fennel: {e}"))?;
+    let fennel_module: LuaTable = bridge("load Fennel", loaded)?;
     let registered = lua.register_module("fennel", &fennel_module);
-    registered.map_err(|e| miette!("Failed to register fennel module: {e}"))?;
+    bridge("register fennel module", registered)?;
 
     let lua_value = Frork::new(handle_status).into_lua(&lua);
-    let frork_value = lua_value.map_err(|e| miette!("Failed to create frork table: {e}"))?;
+    let frork_value = bridge("create frork table", lua_value)?;
     let LuaValue::Table(frork_table) = frork_value else {
         // Frork::into_lua always returns a table.
         unreachable!();
     };
     let registered = lua.register_module("frork", &frork_table);
-    registered.map_err(|e| miette!("Failed to register frork module: {e}"))?;
+    bridge("register frork module", registered)?;
 
     Ok((lua, frork_table, fennel_module))
 }
@@ -172,21 +180,20 @@ impl<F: StatusHandler> Frork<F> {
     }
 
     fn declare(&self, declaration: Declaration, lua: &Lua, args: LuaMultiValue) -> LuaResult<()> {
-        if args.is_empty() {
-            return Err(LuaError::external(FrorkError::NoOperation));
-        }
-
         let mut args_iter = args.into_iter();
-        let name = args_iter.next().and_then(|v| v.to_string().ok());
-        let provider = name.ok_or_else(|| LuaError::external(FrorkError::MissingProvider))?;
+        let provider = args_iter
+            .next()
+            .and_then(|v| v.to_string().ok())
+            .ok_or_else(|| LuaError::external(FrorkError::MissingAssertionType { declaration }))?;
 
         let assertion_args: LuaMultiValue = args_iter.collect();
 
         let factory = self.providers.borrow().get_factory(&provider);
         let factory = factory.map_err(LuaError::external)?;
-        let assertion = factory.build(lua, assertion_args);
+        let assertion = factory.build(&provider, lua, assertion_args);
         let assertion = assertion.map_err(LuaError::external)?;
-        let status = assertion.status().map_err(LuaError::external)?;
+        let status = assertion.status();
+        let status = status.map_err(LuaError::external)?;
 
         (self.handle_status)(declaration, &status, assertion.as_ref())
             .map_err(LuaError::external)?;
@@ -225,6 +232,7 @@ impl<F: StatusHandler> IntoLua for Frork<F> {
 mod tests {
     use super::*;
     use fs_err as fs;
+    use miette::miette;
     use tempfile::TempDir;
 
     type Recorded = Rc<RefCell<Vec<String>>>;
@@ -318,6 +326,28 @@ mod tests {
     }
 
     #[test]
+    fn test_a_declaration_without_a_type_names_the_declaration() {
+        let (_seen, handler) = recorder();
+
+        // The error crosses the Lua boundary and is recovered whole, so
+        // callers can match on it, with its help text intact.
+        let error = run_code("(ok)", handler).unwrap_err();
+        let FrorkError::MissingAssertionType { declaration } = error else {
+            panic!("expected a missing-type error, got {error:?}"); // cov-excl-line
+        };
+        assert_eq!(declaration, Declaration::Ok);
+        assert_eq!(error.to_string(), "ok is missing an assertion type");
+    }
+
+    #[test]
+    fn test_ok_with_a_non_string_type_is_rejected() {
+        let (_seen, handler) = recorder();
+
+        // A table where the provider name goes is not a type either.
+        assert!(run_code("(ok {})", handler).is_err());
+    }
+
+    #[test]
     fn test_declaration_displays_as_its_fennel_name() {
         assert_eq!(Declaration::Ok.to_string(), "ok");
         assert_eq!(Declaration::No.to_string(), "no");
@@ -327,8 +357,31 @@ mod tests {
     fn test_ok_without_arguments_is_rejected() {
         let (_seen, handler) = recorder();
 
-        let error = run_code("(ok)", handler).unwrap_err();
-        assert!(error.to_string().contains("Failed to execute fennel code"));
+        // `no` gets its own missing-type error naming the declaration.
+        let error = run_code("(no)", handler).unwrap_err();
+        let FrorkError::MissingAssertionType { declaration } = error else {
+            panic!("expected a missing-type error, got {error:?}"); // cov-excl-line
+        };
+        assert_eq!(declaration, Declaration::No);
+    }
+
+    #[test]
+    fn test_an_assertion_with_bad_arguments_names_the_provider() {
+        let (_seen, handler) = recorder();
+
+        // `directory` with no path: the provider build failure is recovered
+        // with the Lua conversion failure as its source.
+        let error = run_code("(ok :directory)", handler).unwrap_err();
+        let FrorkError::AssertionBuild { provider, .. } = &error else {
+            panic!("expected a build failure, got {error:?}"); // cov-excl-line
+        };
+        assert_eq!(provider, "directory");
+        assert_eq!(
+            error.to_string(),
+            "Failed to create the directory assertion"
+        );
+        use std::error::Error as _;
+        assert!(error.source().is_some());
     }
 
     #[test]

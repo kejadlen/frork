@@ -53,8 +53,8 @@ struct Source {
 impl Source {
     fn run(&self, handle_status: impl StatusHandler) -> Result<()> {
         match (&self.script, &self.code) {
-            (Some(script), _) => run_script(script, handle_status),
-            (None, Some(code)) => run_code(code, handle_status),
+            (Some(script), _) => Ok(run_script(script, handle_status)?),
+            (None, Some(code)) => Ok(run_code(code, handle_status)?),
             (None, None) => unreachable!("clap requires a script or -e"),
         }
     }

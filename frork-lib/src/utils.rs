@@ -1,5 +1,3 @@
-use miette::Result;
-use miette::miette;
 use mlua::prelude::*;
 use regex::Regex;
 use std::env;
@@ -12,6 +10,7 @@ use std::sync::LazyLock;
 use tracing::debug;
 
 use crate::error::FrorkError;
+use crate::error::SharedError;
 
 /// What one run of a command produced: each stream captured separately,
 /// plus its exit code.
@@ -26,7 +25,7 @@ pub struct CommandOutput {
 pub struct ExpandedPath(String);
 
 impl ExpandedPath {
-    pub fn new(path: &str) -> Result<Self> {
+    pub fn new(path: &str) -> Result<Self, FrorkError> {
         Ok(Self(Utils::expand_path(path)?))
     }
 
@@ -46,9 +45,9 @@ impl From<ExpandedPath> for String {
 }
 
 impl FromStr for ExpandedPath {
-    type Err = miette::Report;
+    type Err = FrorkError;
 
-    fn from_str(path: &str) -> Result<Self> {
+    fn from_str(path: &str) -> Result<Self, FrorkError> {
         Self::new(path)
     }
 }
@@ -99,19 +98,22 @@ impl Utils {
         s.trim_end_matches(['\n', '\r']).to_string()
     }
 
-    pub fn dirname(path: &str) -> Result<Option<String>> {
+    pub fn dirname(path: &str) -> Result<Option<String>, FrorkError> {
         let expanded_path = Self::expand_path(path)?;
         let parent = Path::new(&expanded_path).parent();
         Ok(parent.and_then(|p| p.to_str().map(|s| s.to_string())))
     }
 
-    pub fn expand_path(path: &str) -> Result<String> {
+    pub fn expand_path(path: &str) -> Result<String, FrorkError> {
         Self::expand_path_with(path, |name| env::var(name).ok())
     }
 
     /// Expands `~` and `$VAR` references against the given lookup rather
     /// than the process environment.
-    pub fn expand_path_with(path: &str, lookup: impl Fn(&str) -> Option<String>) -> Result<String> {
+    pub fn expand_path_with(
+        path: &str,
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> Result<String, FrorkError> {
         // The pattern is a literal, so it either always compiles or never does.
         #[allow(clippy::unwrap_used)]
         static ENV_VAR_REGEX: LazyLock<Regex> =
@@ -121,13 +123,12 @@ impl Utils {
 
         if let Some(rest) = expanded.strip_prefix('~') {
             if rest.is_empty() || rest.starts_with('/') {
-                let home =
-                    lookup("HOME").ok_or_else(|| miette!("HOME environment variable not set"))?;
+                let home = lookup("HOME").ok_or(FrorkError::MissingHome)?;
                 expanded = format!("{home}{rest}");
             } else {
-                return Err(miette!(
-                    "Cannot expand '~' in '{path}': only '~' and '~/' are supported"
-                ));
+                return Err(FrorkError::UnsupportedTilde {
+                    path: path.to_string(),
+                });
             }
         }
 
@@ -148,21 +149,18 @@ impl Utils {
         expanded = replaced.to_string();
 
         if !missing.is_empty() {
-            return Err(miette!(
-                "Environment variables not found: {}",
-                missing.join(", ")
-            ));
+            return Err(FrorkError::UnsetVariables { names: missing });
         }
 
         Ok(expanded)
     }
 
-    pub fn platform() -> Result<String> {
+    pub fn platform() -> Result<String, FrorkError> {
         let output = Self::sh("uname", &["-s"])?;
         Ok(Self::chomp(&output.stdout).to_lowercase())
     }
 
-    pub fn sh<T: AsRef<str>>(cmd: &str, args: &[T]) -> Result<CommandOutput> {
+    pub fn sh<T: AsRef<str>>(cmd: &str, args: &[T]) -> Result<CommandOutput, FrorkError> {
         Self::sh_with_envs(cmd, args, &[])
     }
 
@@ -170,7 +168,7 @@ impl Utils {
         cmd: &str,
         args: &[T],
         env_vars: &[(&str, &str)],
-    ) -> Result<CommandOutput> {
+    ) -> Result<CommandOutput, FrorkError> {
         let args_display: Vec<&str> = args.iter().map(|arg| arg.as_ref()).collect();
         debug!(
             "Executing command: {} with args: {} and envs: {:?}",
@@ -185,7 +183,10 @@ impl Utils {
 
         let output = command
             .output()
-            .map_err(|e| miette!("Failed to execute command '{}': {e}", cmd))?;
+            .map_err(|source| FrorkError::CommandSpawn {
+                command: cmd.to_string(),
+                source: SharedError::new(source),
+            })?;
 
         // Both streams become Fennel strings and error-message text, which
         // non-UTF-8 output is unusable as either way.
@@ -194,7 +195,9 @@ impl Utils {
         #[allow(clippy::disallowed_methods)]
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         let code = output.status.code();
-        let status = code.ok_or_else(|| miette!("Command '{}' terminated by signal", cmd))?;
+        let status = code.ok_or_else(|| FrorkError::CommandSignaled {
+            command: cmd.to_string(),
+        })?;
         let stdout_trimmed = stdout.trim();
         let stderr_trimmed = stderr.trim();
         debug!(
@@ -213,14 +216,16 @@ impl Utils {
         })
     }
 
-    pub fn assert_bin(bin_name: &str) -> Result<()> {
+    pub fn assert_bin(bin_name: &str) -> Result<(), FrorkError> {
         let output = Self::sh("which", &[bin_name])?;
 
         if output.status == 0 {
             debug!("Binary '{}' found in PATH", bin_name);
             Ok(())
         } else {
-            Err(miette!("Required binary '{}' not found in PATH", bin_name))
+            Err(FrorkError::MissingBinary {
+                bin: bin_name.to_string(),
+            })
         }
     }
 }
@@ -460,6 +465,28 @@ mod tests {
 
         let error = Utils::assert_bin("frork-does-not-exist").unwrap_err();
         assert!(error.to_string().contains("not found in PATH"));
+    }
+
+    #[test]
+    fn test_sh_reports_a_spawn_failure_with_its_source() {
+        let error = Utils::sh("frork-does-not-exist", &[] as &[&str]).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Failed to execute command 'frork-does-not-exist'"
+        );
+        // The io failure rides behind SharedError; a bare os error ends
+        // the chain there.
+        use std::error::Error as _;
+        let source = error.source().expect("the io failure is the source");
+        assert!(source.source().is_none());
+    }
+
+    #[test]
+    fn test_sh_errors_when_a_command_is_killed_by_a_signal() {
+        // A signal leaves no exit code, so the run cannot become a
+        // CommandOutput.
+        let error = Utils::sh("sh", &["-c", "kill -9 $$"]).unwrap_err();
+        assert_eq!(error.to_string(), "Command 'sh' terminated by signal");
     }
 
     /// `uname -s`, lowercased — what `Utils::platform` is expected to report.
