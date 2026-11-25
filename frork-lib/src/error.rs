@@ -239,6 +239,28 @@ impl FrorkError {
     }
 }
 
+/// Why `frork compile` could not build a standalone binary.
+#[derive(Error, Diagnostic, Debug)]
+pub enum CompileError {
+    #[error("Failed to compile {script}")]
+    #[diagnostic(forward(source))]
+    Fennel {
+        script: String,
+        #[source]
+        source: Cause,
+    },
+    #[error("{version} is a development build with no published binaries")]
+    #[diagnostic(help("pass a frork binary built for the target as --runner"))]
+    DevelopmentBuild { version: String },
+    #[error("{command} failed with {status}")]
+    Command {
+        command: String,
+        status: std::process::ExitStatus,
+    },
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
 /// What a context variant wraps: a `FrorkError` recovered from the far side
 /// of the Lua boundary, or the Lua error itself when there is none. It is
 /// transparent, so the inner error's message, help, and causes render as if

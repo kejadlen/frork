@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::Args;
 use clap::CommandFactory;
 use clap::Parser;
@@ -5,6 +7,7 @@ use clap::Subcommand;
 use clap_complete::Shell;
 use frork_lib::assertions::Assertion;
 use frork_lib::assertions::Status;
+use frork_lib::compile;
 use frork_lib::error::FrorkError;
 use frork_lib::error::SharedError;
 use frork_lib::report;
@@ -12,6 +15,7 @@ use frork_lib::report::Action;
 use frork_lib::runtime::Declaration;
 use frork_lib::runtime::StatusHandler;
 use frork_lib::runtime::run_code;
+use frork_lib::runtime::run_lua;
 use frork_lib::runtime::run_script;
 use miette::IntoDiagnostic as _;
 use miette::Result;
@@ -38,6 +42,19 @@ enum Commands {
     Check(Source),
     /// Create, update, or remove whatever doesn't match its assertion.
     Apply(Source),
+    /// Compile a script into a standalone executable.
+    Compile {
+        script: String,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// The Rust target triple to build for.
+        #[arg(long, default_value = frork_lib::TARGET)]
+        target: String,
+        /// A frork binary for the target to build on, instead of this one
+        /// (for the host) or the one published with this release.
+        #[arg(long)]
+        runner: Option<PathBuf>,
+    },
 }
 
 #[derive(Args)]
@@ -61,6 +78,21 @@ impl Source {
     }
 }
 
+/// The arguments of a compiled script, which runs in place of the CLI.
+#[derive(Parser)]
+#[command(name = "frork", version = frork_lib::VERSION)]
+#[command(about = "Reports the assertions built into this script")]
+struct Standalone {
+    /// Create, update, or remove whatever doesn't match its assertion,
+    /// instead of only reporting.
+    #[arg(long)]
+    apply: bool,
+
+    /// Passed to the script in Lua's `arg` table, after `--`.
+    #[arg(last = true)]
+    args: Vec<String>,
+}
+
 fn main() -> Result<()> {
     // Providers panic through todo!() for cases that are not implemented
     // yet; this renders those with the same formatting as recoverable errors.
@@ -74,6 +106,11 @@ fn main() -> Result<()> {
         .with(fmt::layer().with_writer(std::io::stderr))
         .with(filter)
         .init();
+
+    // A compiled script runs its payload in place of the CLI.
+    if let Some(code) = compile::own_payload()? {
+        return run_standalone(&code);
+    }
 
     let cli = Cli::parse();
 
@@ -94,7 +131,37 @@ fn run(command: &Commands) -> Result<()> {
     match command {
         Commands::Check(source) => source.run(check),
         Commands::Apply(source) => source.run(apply),
+        Commands::Compile {
+            script,
+            output,
+            target,
+            runner,
+        } => {
+            let runner = match runner {
+                Some(runner) => Some(runner.clone()),
+                None if target == frork_lib::TARGET => None,
+                None => Some(compile::Runners::default().get(frork_lib::VERSION, target)?),
+            };
+            Ok(compile::compile(script, runner.as_deref(), output)?)
+        }
     }
+}
+
+fn run_standalone(code: &[u8]) -> Result<()> {
+    let Standalone {
+        apply: change,
+        args,
+    } = Standalone::parse();
+    let program = std::env::args().next().unwrap_or_default();
+    let handle_status =
+        move |declaration: Declaration, status: &Status, assertion: &dyn Assertion| {
+            if change {
+                apply(declaration, status, assertion)
+            } else {
+                check(declaration, status, assertion)
+            }
+        };
+    Ok(run_lua(code, &program, &args, handle_status)?)
 }
 
 fn check(

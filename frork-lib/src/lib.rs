@@ -12,6 +12,7 @@
 )]
 
 pub mod assertions;
+pub mod compile;
 pub mod error;
 pub mod registry;
 pub mod report;
@@ -20,3 +21,7 @@ pub mod utils;
 
 /// CalVer set by build.rs — the crate version is not what ships.
 pub const VERSION: &str = env!("FRORK_VERSION");
+
+/// The target triple frork was built for: what `frork compile` builds for
+/// by default.
+pub const TARGET: &str = env!("FRORK_TARGET");

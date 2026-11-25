@@ -26,7 +26,8 @@ bin/coverage               # grcov coverage report and threshold gate
   dotslash-config.json     # DotSlash launcher config for releases
   workflows/
     ci.yml                 # fmt + clippy + coverage
-    release.yml            # CalVer release on CI success: macOS + Linux tarballs, DotSlash
+    release.yml            # CalVer release on CI success: per-target macOS + Linux tarballs, DotSlash
+    standalone.yml         # Compiles the example for Linux/macOS, runs each
 frork-cli/
   Cargo.toml               # Binary crate — the `frork` CLI; vendors Lua
   src/
@@ -41,6 +42,7 @@ frork-lib/
   src/
     lib.rs                 # Library root — re-exports modules
     assertions.rs          # Built-in providers and the Assertion trait
+    compile.rs             # `frork compile`: Fennel to Lua, payload bundling, runner lookup
     error.rs               # thiserror + miette::Diagnostic enum (FrorkError)
     registry.rs            # Provider name to factory dispatch
     report.rs              # Status wording, apply actions, and update-prompt parsing
@@ -114,10 +116,11 @@ Three workspace-specific details the script depends on:
 
 ### CLI
 
-The CLI (`frork`) uses clap with two subcommands, each taking either a `.fnl` script or inline Fennel code via `-e`/`--eval`. The two are mutually exclusive, and exactly one is required.
+The CLI (`frork`) uses clap with three subcommands. `check` and `apply` each take either a `.fnl` script or inline Fennel code via `-e`/`--eval`. The two are mutually exclusive, and exactly one is required.
 
 - `check <script>` / `check -e <code>` — report the status of each assertion
 - `apply <script>` / `apply -e <code>` — create absent assertions, update drifted ones after an `update? [y/N]` prompt, and remove present or drifted `no` assertions without one
+- `compile <script> -o <out>` — compile a script into a standalone executable (see below)
 
 A `--completions <shell>` flag generates shell completions and exits.
 
@@ -174,3 +177,7 @@ Fennel scripts can define providers via `frork.provide(name, {status=fn, create=
 frork-lib is the engine and depends on neither of the others. frork-cli wraps it in the `frork` CLI with a vendored Lua and is the primary interface. frork-lua exposes it as a Lua module (`require("frork")`): a `cdylib`, and a `staticlib` for linking into a program that hosts its own Lua, such as one from `fennel --compile-binary --native-module`; mlua runs in `module` mode there, against the host's Lua. frork-cli and frork-lua cannot be built together due to those conflicting mlua features.
 
 frork-lua's handler only reports unless the program was run with `--apply`, and then it creates absent `ok` assertions and removes present or drifted `no` ones. It never prompts, so drifted `ok` assertions are reported and left alone.
+
+### Standalone binaries
+
+A standalone binary is a frork binary for the target followed by a payload: the script compiled to Lua (Fennel's `requireAsInclude` inlines sibling modules, and macros expand at compile time), its length as a little-endian `u64`, and an 8-byte magic. `main.rs` checks its own executable for that trailer before parsing arguments and, when it finds one, runs the payload instead of the CLI. A compiled script parses its own arguments with clap (`Standalone` in `main.rs`): `--apply`, `--help`, `--version`, and anything after `--` for the script's `arg` table. `frork compile` uses its own executable for the host target, `--runner` when given, or else downloads `frork-<target>.tar.gz` from the release matching its version. Compiling is only Fennel and copying bytes, so no C compiler is involved for any target.
