@@ -4,3 +4,4 @@ target/
 /result
 /result-*
 .hegel/
+/mutants.out*
